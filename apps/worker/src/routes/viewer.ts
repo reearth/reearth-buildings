@@ -66,6 +66,10 @@ const HTML = `<!DOCTYPE html>
     sceneModePicker: false, navigationHelpButton: false,
     timeline: false, animation: false, fullscreenButton: false,
   });
+  // Enable Cesium's sun-tracking lighting on the globe; side walls were
+  // appearing black because the default ambient term alone left them
+  // unlit when the sun's dot product with the normal was ~0.
+  viewer.scene.globe.enableLighting = true;
   viewer.camera.setView({
     destination: Cesium.Cartesian3.fromDegrees(lon, lat, height),
     orientation: {

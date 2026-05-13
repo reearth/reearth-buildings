@@ -58,7 +58,10 @@ pub fn default_height_meters(feat: &BuildingFeature) -> f64 {
     match (feat.height, feat.levels) {
         (Some(h), _) if h > 0.0 => h,
         (_, Some(l)) if l > 0.0 => l * 3.0,
-        _ => 6.0,
+        // Tokyo OSM data rarely tags small commercial / residential
+        // buildings, so the fallback dominates downtown views. 9 m
+        // (≈ three floors) reads as built-up rather than a flat slab.
+        _ => 9.0,
     }
 }
 
@@ -444,18 +447,21 @@ fn extrude_ring_walls(
             [b[0] as f32, top_height as f32, -b[1] as f32],
             [a[0] as f32, top_height as f32, -a[1] as f32],
         ];
-        // Negated so the post-matrix normal direction lines up with the
-        // outward face under Cesium's transform pipeline (without this
-        // the side walls render unlit when the camera is on their
-        // outside, because the lit side is what's pointing into the
-        // building).
+        // Flipped to match the reversed wall winding below: geometric and
+        // stored normals stay in agreement, which keeps PBR lighting and
+        // backface culling consistent.
         let n_vec = [-nx as f32, 0.0, nz as f32];
         for v in &verts {
             positions.extend_from_slice(v);
             normals.extend_from_slice(&n_vec);
             feature_ids.push(fid);
         }
-        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        // Reversed winding from the natural (a_bot, b_bot, b_top, a_top)
+        // CCW-from-outside order. Once the matrix gets composed with
+        // Cesium's automatic Y_UP_TO_Z_UP rotation the visible side
+        // flips, so the originally outside face ends up culled. We
+        // emit triangles in the rotated convention directly.
+        indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
     }
 }
 
