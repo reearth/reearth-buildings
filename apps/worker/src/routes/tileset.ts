@@ -1,18 +1,20 @@
 import type { Context } from "hono";
 import type { Env } from "../env";
+import { MAX_Z, MIN_Z } from "../lod";
 import { IMPL_VERSION } from "../version";
 
-// Explicit tileset for the M3 thin slice. Implicit tiling (with .subtree
-// binary files) is deferred; until then we emit one child per z=14 tile
-// inside the served bbox. Default bbox = Tokyo central wards.
+// Two-level explicit tileset:
+//   root → z=MIN_Z parents (large buildings only)
+//        → z=MAX_Z children (small buildings, additive)
 //
-// Override via query params: ?w=...&s=...&e=...&n=...
+// `refine: ADD` keeps parents visible as children stream in, so the
+// large-vs-small split between zooms composes into the full set.
 
-const Z = 14;
 const HEIGHT_MIN = 0;
 const HEIGHT_MAX = 200;
+const GE_ROOT = 500;
+const GE_PARENT = 100;
 const GE_LEAF = 0;
-const GE_ROOT = 200;
 
 const DEFAULT_BBOX = { w: 139.65, s: 35.62, e: 139.85, n: 35.78 };
 
@@ -28,6 +30,28 @@ const yToLat = (y: number, z: number) => {
   return (180 / Math.PI) * Math.atan((Math.exp(n) - Math.exp(-n)) / 2);
 };
 
+interface Tile {
+  boundingVolume: { region: number[] };
+  geometricError: number;
+  content?: { uri: string };
+  refine?: "ADD" | "REPLACE";
+  children?: Tile[];
+}
+
+function tileNode(z: number, x: number, y: number, ge: number): Tile {
+  const w = xToLon(x, z);
+  const e = xToLon(x + 1, z);
+  const n = yToLat(y, z);
+  const s = yToLat(y + 1, z);
+  return {
+    boundingVolume: {
+      region: [toRad(w), toRad(s), toRad(e), toRad(n), HEIGHT_MIN, HEIGHT_MAX],
+    },
+    geometricError: ge,
+    content: { uri: `/${IMPL_VERSION}/${z}/${x}/${y}.glb` },
+  };
+}
+
 export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
   const q = c.req.query();
   const bbox = {
@@ -37,27 +61,26 @@ export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
     n: q.n ? Number(q.n) : DEFAULT_BBOX.n,
   };
 
-  const version = IMPL_VERSION;
+  const px0 = lonToX(bbox.w, MIN_Z);
+  const px1 = lonToX(bbox.e, MIN_Z);
+  const pyTop = latToY(bbox.n, MIN_Z);
+  const pyBot = latToY(bbox.s, MIN_Z);
 
-  const x0 = lonToX(bbox.w, Z);
-  const x1 = lonToX(bbox.e, Z);
-  const yTop = latToY(bbox.n, Z);
-  const yBot = latToY(bbox.s, Z);
-
-  const children: unknown[] = [];
-  for (let x = x0; x <= x1; x++) {
-    for (let y = yTop; y <= yBot; y++) {
-      const w = xToLon(x, Z);
-      const e = xToLon(x + 1, Z);
-      const n = yToLat(y, Z);
-      const s = yToLat(y + 1, Z);
-      children.push({
-        boundingVolume: {
-          region: [toRad(w), toRad(s), toRad(e), toRad(n), HEIGHT_MIN, HEIGHT_MAX],
-        },
-        geometricError: GE_LEAF,
-        content: { uri: `/${version}/${Z}/${x}/${y}.glb` },
-      });
+  const parents: Tile[] = [];
+  const factor = 2 ** (MAX_Z - MIN_Z);
+  for (let px = px0; px <= px1; px++) {
+    for (let py = pyTop; py <= pyBot; py++) {
+      const parent = tileNode(MIN_Z, px, py, GE_PARENT);
+      // additively refine into z=MAX_Z children
+      parent.refine = "ADD";
+      const children: Tile[] = [];
+      for (let dx = 0; dx < factor; dx++) {
+        for (let dy = 0; dy < factor; dy++) {
+          children.push(tileNode(MAX_Z, px * factor + dx, py * factor + dy, GE_LEAF));
+        }
+      }
+      parent.children = children;
+      parents.push(parent);
     }
   }
 
@@ -76,8 +99,8 @@ export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
         ],
       },
       geometricError: GE_ROOT,
-      refine: "REPLACE",
-      children,
+      refine: "ADD",
+      children: parents,
     },
   });
 
@@ -85,7 +108,7 @@ export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
     headers: {
       "content-type": "application/json",
       "cache-control": "public, max-age=3600",
-      etag: `"${version}-${bbox.w},${bbox.s},${bbox.e},${bbox.n}"`,
+      etag: `"${IMPL_VERSION}-${bbox.w},${bbox.s},${bbox.e},${bbox.n}"`,
       "access-control-allow-origin": "*",
     },
   });

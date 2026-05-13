@@ -1,9 +1,10 @@
-//! Extrude MVT building polygons into a flat-shaded triangle mesh.
+//! Extrude MVT building polygons (possibly drawn from several source
+//! tiles) into a flat-shaded triangle mesh anchored at an output tile.
 //!
 //! Output frame: tile-local ENU metres (east/north/up), centred on the
-//! tile centre. y is up.
+//! output tile's centre. y is up in the glb-friendly remapping below.
 
-use crate::coord;
+use crate::coord::{self, LonLat};
 use mvt_decoder::{BuildingFeature, DecodedTile};
 
 /// Per-building metadata, indexed by FEATURE_ID written into the mesh.
@@ -16,6 +17,7 @@ pub struct FeatureProps {
     pub height_m: f32,
     pub min_height_m: f32,
     pub levels: u16,
+    pub footprint_m2: f32,
 }
 
 pub struct Mesh {
@@ -31,6 +33,36 @@ pub struct Mesh {
     pub features: Vec<FeatureProps>,
 }
 
+/// A source MVT tile contributing geometry. For z=14 single-tile renders
+/// you pass one. For an aggregated parent (e.g. z=13) you pass the four
+/// z=14 children whose union covers the parent.
+pub struct Source<'a> {
+    pub z: u8,
+    pub x: u32,
+    pub y: u32,
+    pub tile: &'a DecodedTile,
+}
+
+/// Inclusive [`min_area_m2`, `max_area_m2`) filter. Either bound set to
+/// `0.0` disables that end of the range.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AreaFilter {
+    pub min_m2: f32,
+    pub max_m2: f32,
+}
+
+impl AreaFilter {
+    pub fn accepts(&self, area_m2: f32) -> bool {
+        if self.min_m2 > 0.0 && area_m2 < self.min_m2 {
+            return false;
+        }
+        if self.max_m2 > 0.0 && area_m2 >= self.max_m2 {
+            return false;
+        }
+        true
+    }
+}
+
 pub fn default_height_meters(feat: &BuildingFeature) -> f64 {
     match (feat.height, feat.levels) {
         (Some(h), _) if h > 0.0 => h,
@@ -39,50 +71,70 @@ pub fn default_height_meters(feat: &BuildingFeature) -> f64 {
     }
 }
 
-pub fn build_mesh(z: u8, x: u32, y: u32, tile: &DecodedTile) -> Mesh {
+pub fn build_mesh(
+    out_z: u8,
+    out_x: u32,
+    out_y: u32,
+    sources: &[Source<'_>],
+    filter: AreaFilter,
+) -> Mesh {
+    let anchor = coord::tile_center(out_z, out_x, out_y);
+
     let mut positions: Vec<f32> = Vec::new();
     let mut normals: Vec<f32> = Vec::new();
     let mut feature_ids: Vec<u16> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     let mut features: Vec<FeatureProps> = Vec::new();
 
-    for feat in &tile.buildings {
-        let height = default_height_meters(feat);
-        let min_h = feat.min_height.unwrap_or(0.0);
-        // Cap feature count at u16::MAX − 1; spill silently into id=u16::MAX
-        // (a "miscellaneous" bucket). At z=14 a single tile holds far fewer
-        // than 65 535 buildings in practice.
-        let fid = features.len().min(u16::MAX as usize - 1) as u16;
-        let props = FeatureProps {
-            osm_id: feat.id.map(|v| v as i64),
-            name: feat.name.clone(),
-            kind: feat.kind.clone(),
-            building: feat.building.clone(),
-            height_m: height as f32,
-            min_height_m: min_h as f32,
-            levels: feat
-                .levels
-                .unwrap_or(0.0)
-                .round()
-                .clamp(0.0, u16::MAX as f64) as u16,
-        };
-        features.push(props);
+    for source in sources {
+        for feat in &source.tile.buildings {
+            let polygons = group_polygons(&feat.rings);
+            if polygons.is_empty() {
+                continue;
+            }
+            let area = polygons
+                .iter()
+                .map(|p| polygon_area_m2(p, source, source.tile.extent))
+                .sum::<f64>() as f32;
+            if !filter.accepts(area) {
+                continue;
+            }
 
-        for polygon in group_polygons(&feat.rings) {
-            extrude_polygon(
-                z,
-                x,
-                y,
-                tile.extent,
-                &polygon,
-                min_h,
-                height,
-                fid,
-                &mut positions,
-                &mut normals,
-                &mut feature_ids,
-                &mut indices,
-            );
+            let height = default_height_meters(feat);
+            let min_h = feat.min_height.unwrap_or(0.0);
+            let fid = features.len().min(u16::MAX as usize - 1) as u16;
+            features.push(FeatureProps {
+                osm_id: feat.id.map(|v| v as i64),
+                name: feat.name.clone(),
+                kind: feat.kind.clone(),
+                building: feat.building.clone(),
+                height_m: height as f32,
+                min_height_m: min_h as f32,
+                levels: feat
+                    .levels
+                    .unwrap_or(0.0)
+                    .round()
+                    .clamp(0.0, u16::MAX as f64) as u16,
+                footprint_m2: area,
+            });
+
+            for polygon in &polygons {
+                extrude_polygon(
+                    source.z,
+                    source.x,
+                    source.y,
+                    source.tile.extent,
+                    polygon,
+                    anchor,
+                    min_h,
+                    height,
+                    fid,
+                    &mut positions,
+                    &mut normals,
+                    &mut feature_ids,
+                    &mut indices,
+                );
+            }
         }
     }
     Mesh {
@@ -96,17 +148,16 @@ pub fn build_mesh(z: u8, x: u32, y: u32, tile: &DecodedTile) -> Mesh {
 
 /// One outer ring with zero or more holes. All vertex coords are in tile
 /// units; the closing duplicate vertex (when present) has been stripped.
-struct Polygon<'a> {
+struct Polygon {
     outer: Vec<[i32; 2]>,
     holes: Vec<Vec<[i32; 2]>>,
-    _marker: std::marker::PhantomData<&'a ()>,
 }
 
 /// Group MVT rings into polygons using the signed-area sign convention
 /// (spec §4.3.4.4): A > 0 in tile coords starts a new outer ring; A < 0
 /// is a hole attached to the most recent outer.
-fn group_polygons(rings: &[Vec<[i32; 2]>]) -> Vec<Polygon<'static>> {
-    let mut out: Vec<Polygon<'static>> = Vec::new();
+fn group_polygons(rings: &[Vec<[i32; 2]>]) -> Vec<Polygon> {
+    let mut out: Vec<Polygon> = Vec::new();
     for raw in rings {
         let r = strip_close(raw);
         if r.len() < 3 {
@@ -117,12 +168,10 @@ fn group_polygons(rings: &[Vec<[i32; 2]>]) -> Vec<Polygon<'static>> {
             out.push(Polygon {
                 outer: r,
                 holes: Vec::new(),
-                _marker: std::marker::PhantomData,
             });
         } else if let Some(last) = out.last_mut() {
             last.holes.push(r);
         }
-        // A hole that arrives before any outer ring is malformed; drop it.
     }
     out
 }
@@ -135,8 +184,6 @@ fn strip_close(ring: &[[i32; 2]]) -> Vec<[i32; 2]> {
     }
 }
 
-/// Surveyor's formula on tile coordinates (Y-down). Positive area → MVT
-/// exterior ring; negative → interior hole.
 fn signed_area_tile(ring: &[[i32; 2]]) -> f64 {
     if ring.len() < 3 {
         return 0.0;
@@ -150,13 +197,44 @@ fn signed_area_tile(ring: &[[i32; 2]]) -> f64 {
     0.5 * a
 }
 
+/// Footprint area in m². Computes in the source tile's own ENU frame
+/// (anchor-independent), subtracting hole areas.
+fn polygon_area_m2(polygon: &Polygon, source: &Source<'_>, extent: u32) -> f64 {
+    let src_center = coord::tile_center(source.z, source.x, source.y);
+    let outer_area = ring_area_m2(&polygon.outer, source, extent, src_center).abs();
+    let hole_area: f64 = polygon
+        .holes
+        .iter()
+        .map(|h| ring_area_m2(h, source, extent, src_center).abs())
+        .sum();
+    (outer_area - hole_area).max(0.0)
+}
+
+fn ring_area_m2(ring: &[[i32; 2]], source: &Source<'_>, extent: u32, anchor: LonLat) -> f64 {
+    if ring.len() < 3 {
+        return 0.0;
+    }
+    let enu: Vec<[f64; 2]> = ring
+        .iter()
+        .map(|p| coord::tile_xy_to_enu_at(source.z, source.x, source.y, extent, p[0], p[1], anchor))
+        .collect();
+    let mut a = 0.0;
+    for i in 0..enu.len() {
+        let p = enu[i];
+        let q = enu[(i + 1) % enu.len()];
+        a += p[0] * q[1] - q[0] * p[1];
+    }
+    0.5 * a
+}
+
 #[allow(clippy::too_many_arguments)]
 fn extrude_polygon(
-    z: u8,
-    tx: u32,
-    ty: u32,
+    src_z: u8,
+    src_x: u32,
+    src_y: u32,
     extent: u32,
-    polygon: &Polygon<'_>,
+    polygon: &Polygon,
+    anchor: LonLat,
     base_height: f64,
     top_height: f64,
     fid: u16,
@@ -165,18 +243,17 @@ fn extrude_polygon(
     feature_ids: &mut Vec<u16>,
     indices: &mut Vec<u32>,
 ) {
-    // ----- roof (with holes) -----
     let outer_enu: Vec<[f64; 2]> = polygon
         .outer
         .iter()
-        .map(|p| coord::tile_xy_to_enu(z, tx, ty, extent, p[0], p[1]))
+        .map(|p| coord::tile_xy_to_enu_at(src_z, src_x, src_y, extent, p[0], p[1], anchor))
         .collect();
     let hole_enus: Vec<Vec<[f64; 2]>> = polygon
         .holes
         .iter()
         .map(|h| {
             h.iter()
-                .map(|p| coord::tile_xy_to_enu(z, tx, ty, extent, p[0], p[1]))
+                .map(|p| coord::tile_xy_to_enu_at(src_z, src_x, src_y, extent, p[0], p[1], anchor))
                 .collect()
         })
         .collect();
@@ -202,7 +279,6 @@ fn extrude_polygon(
     let roof_tris = earcutr::earcut(&flat, &hole_indices, 2).unwrap_or_default();
 
     if !roof_tris.is_empty() {
-        // Push all vertices used by earcut (outer + holes) in the same order.
         let base = positions.len() as u32 / 3;
         let mut all_pts: Vec<[f64; 2]> = Vec::with_capacity(running);
         all_pts.extend_from_slice(&outer_enu);
@@ -221,7 +297,6 @@ fn extrude_polygon(
         }
     }
 
-    // ----- walls (outer ring + every hole ring) -----
     extrude_ring_walls(
         &outer_enu,
         base_height,
@@ -260,10 +335,6 @@ fn extrude_ring_walls(
     if enu.len() < 3 {
         return;
     }
-    // Walls assume CW traversal in (east, north): MVT outer rings already
-    // arrive in this orientation (positive tile-area = CW after the y-flip
-    // to north). Holes arrive CCW; reverse them so the wall's outward face
-    // points into the courtyard, not into the solid material.
     let mut a_enu = 0.0;
     for i in 0..enu.len() {
         let p = enu[i];

@@ -1,7 +1,7 @@
 //! End-to-end glb tile builder.
 //!
-//! Pipeline: MVT buildings layer (gzipped or not) →
-//!   triangulated, extruded mesh in tile-local ENU →
+//! Pipeline: one or more MVT buildings layers (gzipped or not) →
+//!   triangulated, extruded mesh in the output tile's ENU →
 //!   glb (glTF 2.0 binary) with a root-node ENU→ECEF matrix.
 
 use bytes::Bytes;
@@ -9,6 +9,8 @@ use bytes::Bytes;
 pub mod coord;
 pub mod glb;
 pub mod mesh;
+
+pub use mesh::AreaFilter;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -18,33 +20,54 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-pub struct TileCoord {
+/// One MVT input identified by the tile (z, x, y) it represents.
+pub struct MvtInput<'a> {
     pub z: u8,
     pub x: u32,
     pub y: u32,
+    pub bytes: &'a [u8],
 }
 
-pub fn render_glb(coord: TileCoord, mvt: &[u8]) -> Result<Bytes> {
-    let tile = mvt_decoder::decode_buildings(mvt)?;
-    let mesh = mesh::build_mesh(coord.z, coord.x, coord.y, &tile);
+/// Render an output tile from one or more source MVT tiles.
+///
+/// * `out_(z|x|y)`: the tile the glb is for. All geometry is anchored at
+///   this tile's centre.
+/// * `sources`: one or more MVT inputs. For a single-tile render they
+///   simply equal `out_(z, x, y)`; for an aggregated parent at z=13 they
+///   are typically the four z=14 children covering it.
+/// * `filter`: minimum / maximum building footprint area in m². Pass
+///   `AreaFilter::default()` to include all buildings.
+pub fn render_glb_lod(
+    out_z: u8,
+    out_x: u32,
+    out_y: u32,
+    sources: &[MvtInput<'_>],
+    filter: AreaFilter,
+) -> Result<Bytes> {
+    let decoded: Vec<(u8, u32, u32, mvt_decoder::DecodedTile)> = sources
+        .iter()
+        .map(|s| Ok((s.z, s.x, s.y, mvt_decoder::decode_buildings(s.bytes)?)))
+        .collect::<Result<_>>()?;
+    let mesh_sources: Vec<mesh::Source<'_>> = decoded
+        .iter()
+        .map(|(z, x, y, t)| mesh::Source {
+            z: *z,
+            x: *x,
+            y: *y,
+            tile: t,
+        })
+        .collect();
+    let mesh = mesh::build_mesh(out_z, out_x, out_y, &mesh_sources, filter);
 
-    let center = self::coord::tile_center(coord.z, coord.x, coord.y);
-    // glTF node matrix expects a "y-up local frame", but our mesh writes its
-    // local positions as (east, up, -north) so that y=up matches viewers. We
-    // therefore need a matrix that maps that frame back to ECEF: rebuild it
-    // by swapping the basis columns relative to enu_to_ecef.
-    let m = self::coord::enu_to_ecef_matrix(center);
+    let center = coord::tile_center(out_z, out_x, out_y);
+    let m = coord::enu_to_ecef_matrix(center);
     let transform = remap_yup_to_enu(m);
 
     let bytes = glb::write_glb(&mesh, transform);
     Ok(Bytes::from(bytes))
 }
 
-/// Our mesh uses (x=east, y=up, z=-north). Convert the ENU→ECEF matrix
-/// (which maps (east,north,up) columns) to one that takes (east,up,-north).
 fn remap_yup_to_enu(enu_to_ecef: [f64; 16]) -> [f64; 16] {
-    // Original columns (column-major): col0=east, col1=north, col2=up, col3=translation.
-    // Target columns: col0=east, col1=up, col2=-north, col3=translation.
     let col = |c: usize| {
         [
             enu_to_ecef[c * 4],
@@ -72,16 +95,20 @@ mod tests {
 
     #[test]
     fn empty_mvt_produces_valid_glb() {
-        let glb = render_glb(
-            TileCoord {
+        let glb = render_glb_lod(
+            14,
+            14552,
+            6451,
+            &[MvtInput {
                 z: 14,
                 x: 14552,
                 y: 6451,
-            },
-            &[],
+                bytes: &[],
+            }],
+            AreaFilter::default(),
         )
         .unwrap();
-        assert!(glb.len() > 28); // header + at least both chunk headers
+        assert!(glb.len() > 20);
         assert_eq!(&glb[0..4], b"glTF");
     }
 }

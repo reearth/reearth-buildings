@@ -1,23 +1,22 @@
 import type { Context } from "hono";
 import type { Env } from "../env";
 import { sha1Hex } from "../hash";
+import { MAX_Z, MIN_Z, THRESHOLD_M2 } from "../lod";
 import { fetchBuildingsMvt } from "../pmtiles";
 import { IMPL_VERSION, currentPmtilesDate } from "../version";
-import { renderGlbWasm } from "../wasm";
+import { type SourceTile, renderGlbWasm } from "../wasm";
 
 /**
- * Content-addressable tile delivery.
+ * Content-addressable, LOD-aware tile delivery.
  *
- * Flow:
- *   1. Resolve the current upstream PMTiles date (KV-cached, 1h TTL).
- *   2. Fetch the MVT bytes via PMTiles Range (Cloudflare caches the Range
- *      response, so this is cheap on repeats).
- *   3. Hash the MVT → ETag. If the client already has it, return 304
- *      without doing any further work.
- *   4. Look up R2 by hash. If the same MVT was ever rendered before, the
- *      glb is already there and we reuse it — even if the pmtiles build
- *      date changed, content-unchanged tiles never re-render.
- *   5. Only on R2 miss do we run the WASM pipeline.
+ * z=13 aggregates the four z=14 children's MVTs and keeps only buildings
+ * with footprint ≥ THRESHOLD_M2 (large landmarks). z=14 keeps only
+ * buildings smaller than that. Together with refine:ADD in tileset.json
+ * the two layers compose without overlap.
+ *
+ * The ETag is a hash of all MVT inputs concatenated with the filter
+ * range — so any upstream change in any of the contributing tiles
+ * invalidates only the affected output.
  */
 export const glbTile = async (c: Context<{ Bindings: Env }>) => {
   if (c.req.param("impl") !== IMPL_VERSION) {
@@ -27,18 +26,30 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
   const z = Number(c.req.param("z"));
   const x = Number(c.req.param("x"));
   const y = Number(c.req.param("y"));
-  if (z !== 14) return c.text("only z=14 is served", 404);
+  if (z < MIN_Z || z > MAX_Z) {
+    return c.text(`only z=${MIN_Z}..${MAX_Z} is served`, 404);
+  }
 
   const pmtilesDate = await currentPmtilesDate(c.env);
-  const mvt = await fetchBuildingsMvt(pmtilesDate, z, x, y);
-  if (!mvt) return c.text("tile out of source coverage", 404);
 
-  const hash = await sha1Hex(mvt);
+  // Fetch the source MVTs that contribute to this output tile.
+  const sourceCoords = childCoordsAtZ(z, x, y, MAX_Z);
+  const sourceTiles: SourceTile[] = [];
+  for (const sc of sourceCoords) {
+    const mvt = await fetchBuildingsMvt(pmtilesDate, sc.z, sc.x, sc.y);
+    if (mvt) sourceTiles.push({ mvt, z: sc.z, x: sc.x, y: sc.y });
+  }
+  if (sourceTiles.length === 0) {
+    return c.text("tile out of source coverage", 404);
+  }
+
+  // Hash inputs (deterministic across deploys for unchanged content).
+  const filter =
+    z === MAX_Z ? { minM2: 0, maxM2: THRESHOLD_M2 } : { minM2: THRESHOLD_M2, maxM2: 0 };
+  const hash = await hashSources(sourceTiles, z, x, y, filter);
   const etag = `"${hash}"`;
   const headers = {
     "content-type": "model/gltf-binary",
-    // must-revalidate: clients can reuse for a few minutes, then ask us
-    // again so we can serve a 304 (cheap) when content hasn't changed.
     "cache-control": "public, max-age=300, must-revalidate",
     etag,
     "access-control-allow-origin": "*",
@@ -54,7 +65,49 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     return new Response(cached.body, { headers });
   }
 
-  const glb = renderGlbWasm(mvt, z, x, y);
+  const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter);
   c.executionCtx.waitUntil(c.env.CACHE.put(r2Key, glb));
   return new Response(glb, { headers });
 };
+
+/** Tile coords of the descendants at zoom `targetZ` that fully cover (z, x, y). */
+function childCoordsAtZ(z: number, x: number, y: number, targetZ: number) {
+  if (targetZ < z) return [];
+  const f = 2 ** (targetZ - z);
+  const result: Array<{ z: number; x: number; y: number }> = [];
+  for (let dx = 0; dx < f; dx++) {
+    for (let dy = 0; dy < f; dy++) {
+      result.push({ z: targetZ, x: x * f + dx, y: y * f + dy });
+    }
+  }
+  return result;
+}
+
+/** Stable fingerprint covering inputs + filter + output coord. */
+async function hashSources(
+  sources: SourceTile[],
+  outZ: number,
+  outX: number,
+  outY: number,
+  filter: { minM2: number; maxM2: number },
+): Promise<string> {
+  const header = new TextEncoder().encode(
+    `${outZ}/${outX}/${outY};f=${filter.minM2},${filter.maxM2};n=${sources.length};`,
+  );
+  // Hash each MVT first (cheap on cache hit, ~1ms), then mix into a final
+  // hash so input order matters but per-tile recomputation is avoided
+  // across versions of the filter / output coord.
+  const per: Uint8Array[] = [header];
+  for (const s of sources) {
+    const h = await sha1Hex(s.mvt, 16);
+    per.push(new TextEncoder().encode(`${s.z}/${s.x}/${s.y}:${h};`));
+  }
+  const total = per.reduce((n, b) => n + b.length, 0);
+  const concat = new Uint8Array(total);
+  let off = 0;
+  for (const b of per) {
+    concat.set(b, off);
+    off += b.length;
+  }
+  return sha1Hex(concat, 12);
+}
