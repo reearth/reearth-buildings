@@ -15,8 +15,13 @@ app.get(
   tilesetJson,
 );
 
+// Versioned glb URL: /{version}/{z}/{x}/{y}.glb. The version is
+// `${IMPL_VERSION}-d${PMTILES_VERSION}`; see src/version.ts. Including it
+// in the path lets us bump the constant or env var to atomically
+// invalidate every cache layer (edge Cache API, browser, R2) — the URL
+// itself is the cache key.
 app.get(
-  "/:z{[0-9]+}/:x{[0-9]+}/:y{[0-9]+}.glb",
+  "/:version/:z{[0-9]+}/:x{[0-9]+}/:y{[0-9]+}.glb",
   cache({ cacheName: "glb", cacheControl: "public, max-age=2592000, immutable" }),
   glbTile,
 );

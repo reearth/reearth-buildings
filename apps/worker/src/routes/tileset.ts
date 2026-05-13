@@ -1,5 +1,6 @@
 import type { Context } from "hono";
 import type { Env } from "../env";
+import { buildVersionKey } from "../version";
 
 // Explicit tileset for the M3 thin slice. Implicit tiling (with .subtree
 // binary files) is deferred; until then we emit one child per z=14 tile
@@ -36,6 +37,8 @@ export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
     n: q.n ? Number(q.n) : DEFAULT_BBOX.n,
   };
 
+  const version = buildVersionKey(c.env);
+
   const x0 = lonToX(bbox.w, Z);
   const x1 = lonToX(bbox.e, Z);
   const yTop = latToY(bbox.n, Z);
@@ -53,12 +56,12 @@ export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
           region: [toRad(w), toRad(s), toRad(e), toRad(n), HEIGHT_MIN, HEIGHT_MAX],
         },
         geometricError: GE_LEAF,
-        content: { uri: `/${Z}/${x}/${y}.glb` },
+        content: { uri: `/${version}/${Z}/${x}/${y}.glb` },
       });
     }
   }
 
-  return c.json({
+  const body = JSON.stringify({
     asset: { version: "1.1", copyright: "© OpenStreetMap contributors" },
     geometricError: GE_ROOT,
     root: {
@@ -75,6 +78,15 @@ export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
       geometricError: GE_ROOT,
       refine: "REPLACE",
       children,
+    },
+  });
+
+  return new Response(body, {
+    headers: {
+      "content-type": "application/json",
+      "cache-control": "public, max-age=3600",
+      etag: `"${version}-${bbox.w},${bbox.s},${bbox.e},${bbox.n}"`,
+      "access-control-allow-origin": "*",
     },
   });
 };

@@ -35,3 +35,4 @@ pkg/
 
 # per-developer cargo config (often contains local toolchain paths)
 .cargo/config.toml
+.claude/
