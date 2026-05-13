@@ -1,0 +1,25 @@
+/target
+/crates/**/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# wrangler
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# build artifacts
+build/
+dist/
+pkg/
+
+# editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# env
+.env
+.env.local

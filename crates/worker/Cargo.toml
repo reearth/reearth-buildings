@@ -1,0 +1,18 @@
+[package]
+name = "reearth-buildings-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cloudflare Worker entry point for buildings.reearth.land"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+worker = { workspace = true }
+worker-macros = { workspace = true }
+console_error_panic_hook = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+buildings-core = { path = "../buildings-core" }

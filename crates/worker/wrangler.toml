@@ -1,0 +1,79 @@
+name = "reearth-buildings-worker"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-05-01"
+workers_dev = true
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[vars]
+PMTILES_VERSION = "20260513"
+PMTILES_SOURCE_URL = "https://build.protomaps.com/20260513.pmtiles"
+
+[[r2_buckets]]
+binding = "SOURCES"
+bucket_name = "reearth-buildings-sources-dev"
+
+[[r2_buckets]]
+binding = "CACHE"
+bucket_name = "reearth-buildings-cache-dev"
+
+[[r2_buckets]]
+binding = "STATIC"
+bucket_name = "reearth-buildings-static-dev"
+
+[[kv_namespaces]]
+binding = "PMTILES_DIR"
+id = "REPLACE_WITH_DEV_KV_ID"
+
+# ----- environments -----
+
+[env.staging]
+name = "reearth-buildings-worker-staging"
+workers_dev = false
+routes = [{ pattern = "staging-buildings.reearth.land", custom_domain = true }]
+
+[env.staging.vars]
+PMTILES_VERSION = "20260513"
+PMTILES_SOURCE_URL = "https://build.protomaps.com/20260513.pmtiles"
+
+[[env.staging.r2_buckets]]
+binding = "SOURCES"
+bucket_name = "reearth-buildings-sources"
+
+[[env.staging.r2_buckets]]
+binding = "CACHE"
+bucket_name = "reearth-buildings-cache-staging"
+
+[[env.staging.r2_buckets]]
+binding = "STATIC"
+bucket_name = "reearth-buildings-static"
+
+[[env.staging.kv_namespaces]]
+binding = "PMTILES_DIR"
+id = "REPLACE_WITH_STAGING_KV_ID"
+
+[env.prod]
+name = "reearth-buildings-worker-prod"
+workers_dev = false
+routes = [{ pattern = "buildings.reearth.land", custom_domain = true }]
+
+[env.prod.vars]
+PMTILES_VERSION = "20260513"
+PMTILES_SOURCE_URL = "https://build.protomaps.com/20260513.pmtiles"
+
+[[env.prod.r2_buckets]]
+binding = "SOURCES"
+bucket_name = "reearth-buildings-sources"
+
+[[env.prod.r2_buckets]]
+binding = "CACHE"
+bucket_name = "reearth-buildings-cache-prod"
+
+[[env.prod.r2_buckets]]
+binding = "STATIC"
+bucket_name = "reearth-buildings-static"
+
+[[env.prod.kv_namespaces]]
+binding = "PMTILES_DIR"
+id = "REPLACE_WITH_PROD_KV_ID"
