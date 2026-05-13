@@ -8,6 +8,5 @@ description = "Building polygon extrusion → glTF/glb (3D Tiles 1.1) generator"
 
 [dependencies]
 mvt-decoder = { path = "../mvt-decoder" }
-pmtiles-reader = { path = "../pmtiles-reader" }
 bytes = { workspace = true }
 thiserror = { workspace = true }

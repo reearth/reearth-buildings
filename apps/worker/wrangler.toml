@@ -1,10 +1,11 @@
 name = "reearth-buildings-worker"
-main = "build/worker/shim.mjs"
+main = "src/index.ts"
 compatibility_date = "2025-05-01"
 workers_dev = true
 
-[build]
-command = "cargo install -q worker-build && worker-build --release"
+# wasm-pack --target bundler emits an ES module wrapper + .wasm asset; wrangler
+# bundles them. Run `pnpm build:wasm` before `wrangler dev` / `deploy` (the
+# package.json scripts chain them automatically).
 
 [vars]
 PMTILES_VERSION = "20260513"

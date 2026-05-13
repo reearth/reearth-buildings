@@ -1,0 +1,18 @@
+[package]
+name = "buildings-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "wasm-bindgen entry: MVT bytes → glb bytes"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+buildings-core = { path = "../buildings-core" }
+wasm-bindgen = { workspace = true }
+console_error_panic_hook = { workspace = true }
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]

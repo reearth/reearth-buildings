@@ -1,5 +1,13 @@
 /target
 /crates/**/target
+
+# node / pnpm
+node_modules/
+.pnpm-store/
+
+# wasm-pack output (built artifact)
+apps/worker/wasm/
+dist/
 **/*.rs.bk
 Cargo.lock.bak
 

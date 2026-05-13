@@ -9,8 +9,6 @@ use bytes::Bytes;
 pub enum Error {
     #[error(transparent)]
     Mvt(#[from] mvt_decoder::Error),
-    #[error(transparent)]
-    PmTiles(#[from] pmtiles_reader::Error),
     #[error("encode: {0}")]
     Encode(&'static str),
 }
@@ -31,6 +29,6 @@ pub fn default_height_meters(levels: Option<f64>, raw_height: Option<f64>) -> f6
     }
 }
 
-pub async fn render_glb(_coord: TileCoord, _mvt: &[u8]) -> Result<Bytes> {
+pub fn render_glb(_coord: TileCoord, _mvt: &[u8]) -> Result<Bytes> {
     Err(Error::Encode("render_glb not implemented yet"))
 }
