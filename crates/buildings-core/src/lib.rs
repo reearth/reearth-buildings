@@ -59,7 +59,15 @@ pub fn render_glb_lod(
 
     let center = coord::tile_center(out_z, out_x, out_y);
     let m = coord::enu_to_ecef_matrix(center);
-    let transform = remap_yup_to_enu(m);
+    // Two compositions: first re-shuffle the basis columns so the matrix
+    // accepts our Y-up local vertices (vx=east, vy=up, vz=-north), then
+    // apply Z_UP_TO_Y_UP to the matrix output so Cesium's automatic
+    // Y_UP_TO_Z_UP unwrap leaves the geometry sitting at the correct
+    // ECEF location. Without the second step Cesium silently places the
+    // entire tileset at the swap-rotated coordinate, which lands in the
+    // wrong country and makes everything invisible.
+    let local_yup = remap_yup_to_enu(m);
+    let transform = apply_zup_to_yup_to_output(local_yup);
 
     let bytes = glb::write_glb(&mesh, transform);
     Ok(Bytes::from(bytes))
@@ -84,6 +92,21 @@ fn remap_yup_to_enu(enu_to_ecef: [f64; 16]) -> [f64; 16] {
     out[4..8].copy_from_slice(&up);
     out[8..12].copy_from_slice(&neg_north);
     out[12..16].copy_from_slice(&tr);
+    out
+}
+
+/// Pre-compose the matrix with Cesium's `Axis.Z_UP_TO_Y_UP` rotation so its
+/// (always-on) `Axis.Y_UP_TO_Z_UP` post-rotation cancels back out to the
+/// correct ECEF placement. For each column `(cx, cy, cz, cw)` of the
+/// input matrix we emit `(cx, cz, -cy, cw)`.
+fn apply_zup_to_yup_to_output(m: [f64; 16]) -> [f64; 16] {
+    let mut out = [0.0f64; 16];
+    for i in 0..4 {
+        out[i * 4] = m[i * 4];
+        out[i * 4 + 1] = m[i * 4 + 2];
+        out[i * 4 + 2] = -m[i * 4 + 1];
+        out[i * 4 + 3] = m[i * 4 + 3];
+    }
     out
 }
 

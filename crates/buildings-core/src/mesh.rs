@@ -444,7 +444,12 @@ fn extrude_ring_walls(
             [b[0] as f32, top_height as f32, -b[1] as f32],
             [a[0] as f32, top_height as f32, -a[1] as f32],
         ];
-        let n_vec = [nx as f32, 0.0, -nz as f32];
+        // Negated so the post-matrix normal direction lines up with the
+        // outward face under Cesium's transform pipeline (without this
+        // the side walls render unlit when the camera is on their
+        // outside, because the lit side is what's pointing into the
+        // building).
+        let n_vec = [-nx as f32, 0.0, nz as f32];
         for v in &verts {
             positions.extend_from_slice(v);
             normals.extend_from_slice(&n_vec);

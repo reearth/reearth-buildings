@@ -85,6 +85,10 @@ const HTML = `<!DOCTYPE html>
     debugShowBoundingVolume: debug,
   });
   viewer.scene.primitives.add(tileset);
+  // Expose for debugging via DevTools console.
+  window.viewer = viewer;
+  window.tileset = tileset;
+  window.Cesium = Cesium;
 
   tileset.tileLoad.addEventListener(() => {
     loaded++;
