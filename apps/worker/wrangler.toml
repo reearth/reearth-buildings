@@ -8,8 +8,10 @@ workers_dev = true
 # package.json scripts chain them automatically).
 
 [vars]
+# PMTILES_VERSION pins the upstream Protomaps build date (YYYYMMDD). Leave
+# unset to let the worker auto-discover the latest build via KV-cached
+# HEAD probes. Pinning is handy for reproducible dev / staging sessions.
 PMTILES_VERSION = "20260513"
-PMTILES_SOURCE_URL = "https://build.protomaps.com/20260513.pmtiles"
 
 [[r2_buckets]]
 binding = "SOURCES"
@@ -31,8 +33,7 @@ workers_dev = false
 routes = [{ pattern = "staging-buildings.reearth.land", custom_domain = true }]
 
 [env.staging.vars]
-PMTILES_VERSION = "20260513"
-PMTILES_SOURCE_URL = "https://build.protomaps.com/20260513.pmtiles"
+# staging auto-discovers latest upstream — leave PMTILES_VERSION unset.
 
 [[env.staging.r2_buckets]]
 binding = "SOURCES"
@@ -52,8 +53,7 @@ workers_dev = false
 routes = [{ pattern = "buildings.reearth.land", custom_domain = true }]
 
 [env.prod.vars]
-PMTILES_VERSION = "20260513"
-PMTILES_SOURCE_URL = "https://build.protomaps.com/20260513.pmtiles"
+# prod auto-discovers latest upstream — leave PMTILES_VERSION unset.
 
 [[env.prod.r2_buckets]]
 binding = "SOURCES"

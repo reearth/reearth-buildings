@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { Env } from "../env";
-import { buildVersionKey } from "../version";
+import { IMPL_VERSION } from "../version";
 
 // Explicit tileset for the M3 thin slice. Implicit tiling (with .subtree
 // binary files) is deferred; until then we emit one child per z=14 tile
@@ -37,7 +37,7 @@ export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
     n: q.n ? Number(q.n) : DEFAULT_BBOX.n,
   };
 
-  const version = buildVersionKey(c.env);
+  const version = IMPL_VERSION;
 
   const x0 = lonToX(bbox.w, Z);
   const x1 = lonToX(bbox.e, Z);

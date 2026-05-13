@@ -15,15 +15,10 @@ app.get(
   tilesetJson,
 );
 
-// Versioned glb URL: /{version}/{z}/{x}/{y}.glb. The version is
-// `${IMPL_VERSION}-d${PMTILES_VERSION}`; see src/version.ts. Including it
-// in the path lets us bump the constant or env var to atomically
-// invalidate every cache layer (edge Cache API, browser, R2) — the URL
-// itself is the cache key.
-app.get(
-  "/:version/:z{[0-9]+}/:x{[0-9]+}/:y{[0-9]+}.glb",
-  cache({ cacheName: "glb", cacheControl: "public, max-age=2592000, immutable" }),
-  glbTile,
-);
+// Versioned glb URL: /{impl}/{z}/{x}/{y}.glb. The {impl} segment is the
+// IMPL_VERSION constant; bumping it invalidates the URL space. Upstream
+// PMTiles updates are handled inside the handler via a content hash on
+// the MVT bytes (ETag) — see src/routes/glb.ts.
+app.get("/:impl/:z{[0-9]+}/:x{[0-9]+}/:y{[0-9]+}.glb", glbTile);
 
 export default app;

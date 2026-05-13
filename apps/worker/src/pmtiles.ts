@@ -1,5 +1,5 @@
 import { PMTiles, type RangeResponse, type Source } from "pmtiles";
-import type { Env } from "./env";
+import { upstreamUrl } from "./version";
 
 class RangeSource implements Source {
   constructor(private readonly url: string) {}
@@ -28,26 +28,31 @@ class RangeSource implements Source {
   }
 }
 
-let pmtilesInstance: PMTiles | undefined;
+// Per-isolate cache so a busy edge keeps its PMTiles header/leaf-directory
+// state hot across requests. Keyed by date so a pmtiles version bump
+// doesn't reuse a stale instance.
+const instances = new Map<string, PMTiles>();
 
-function pmtilesFor(env: Env): PMTiles {
-  if (!pmtilesInstance) {
-    pmtilesInstance = new PMTiles(new RangeSource(env.PMTILES_SOURCE_URL));
+function pmtilesFor(date: string): PMTiles {
+  let inst = instances.get(date);
+  if (!inst) {
+    inst = new PMTiles(new RangeSource(upstreamUrl(date)));
+    instances.set(date, inst);
   }
-  return pmtilesInstance;
+  return inst;
 }
 
 /**
- * Fetch the MVT bytes for a tile at (z, x, y) from the upstream PMTiles file.
- * Returns null when the tile is absent (sea, out of coverage, etc).
+ * Fetch the (decompressed) MVT bytes for a tile from a specific upstream
+ * date. Returns null if the tile is absent (e.g. ocean, out-of-coverage).
  */
 export async function fetchBuildingsMvt(
-  env: Env,
+  date: string,
   z: number,
   x: number,
   y: number,
 ): Promise<Uint8Array | null> {
-  const tile = await pmtilesFor(env).getZxy(z, x, y);
+  const tile = await pmtilesFor(date).getZxy(z, x, y);
   if (!tile) return null;
   return new Uint8Array(tile.data);
 }
