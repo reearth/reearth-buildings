@@ -1,11 +1,18 @@
 //! WASM bridge: JS hands us one-or-more MVT byte blobs + their tile coords,
 //! we hand back glb bytes.
 
+use std::sync::Once;
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen(start)]
-pub fn _start() {
-    console_error_panic_hook::set_once();
+// wasm-bindgen's auto-called `#[wasm_bindgen(start)]` hooks are skipped
+// by some hosts (workerd, in particular), leaving panics unintelligible.
+// Initialise lazily from the first WASM entry point instead.
+static INIT: Once = Once::new();
+
+fn ensure_init() {
+    INIT.call_once(|| {
+        console_error_panic_hook::set_once();
+    });
 }
 
 // meshoptimizer's C++ allocator pulls in `operator new` / `operator delete`,
@@ -76,6 +83,7 @@ pub fn render_glb_lod(
     simplify_ratio: f32,
     simplify_target_error_m: f32,
 ) -> std::result::Result<Vec<u8>, JsError> {
+    ensure_init();
     if mvt_lens.len() * 3 != src_tiles.len() {
         return Err(JsError::new("mvt_lens / src_tiles length mismatch"));
     }

@@ -24,6 +24,32 @@ export const LOD_MODE: LodMode = "add";
 export const MIN_Z = 13;
 export const MAX_Z = 14;
 
+/**
+ * Recursion break in the quadtree of external sub-tilesets. Sub-tilesets
+ * at z < LEAF_PARENT_Z list four external children at z+1; sub-tilesets
+ * at z = LEAF_PARENT_Z enumerate the concrete z=MIN_Z and z=MAX_Z glb
+ * tiles inline. Set to MIN_Z - 1 so the deepest navigation level sits
+ * one above the real glb leaves.
+ */
+export const LEAF_PARENT_Z = MIN_Z - 1;
+
+/**
+ * Maximum height the rendered glb buildings can reach. Used in tileset
+ * bounding-volume regions so Cesium's culling is generous enough for
+ * downtown skyscrapers.
+ */
+export const HEIGHT_MIN_M = 0;
+export const HEIGHT_MAX_M = 200;
+
+/** Geometric error (worst-case deviation in metres) for a tile at zoom z. */
+export function geometricErrorFor(z: number): number {
+  if (z >= MAX_Z) return 0;
+  // 40 075 017 m ≈ Earth circumference at the equator → tile width at z.
+  // Dividing further by 100 produces values matching common Cesium defaults
+  // (root ~400 km, z=12 ~100 m, z=13 ~50 m).
+  return 40_075_017 / 2 ** z / 100;
+}
+
 /** Footprint cutoff between z=13 and z=14 in ADD mode. Ignored in REPLACE. */
 export const THRESHOLD_M2 = 2000;
 

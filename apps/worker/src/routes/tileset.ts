@@ -1,117 +1,167 @@
 import type { Context } from "hono";
 import type { Env } from "../env";
-import { MAX_Z, MIN_Z, refineFor } from "../lod";
+import {
+  HEIGHT_MAX_M,
+  HEIGHT_MIN_M,
+  LEAF_PARENT_Z,
+  MAX_Z,
+  MIN_Z,
+  geometricErrorFor,
+  refineFor,
+} from "../lod";
+import { tileRegion, toRad } from "../tile";
 import { IMPL_VERSION } from "../version";
 
-// Two-level explicit tileset:
-//   root → z=MIN_Z parents (large buildings only)
-//        → z=MAX_Z children (small buildings, additive)
+// World coverage via a lazy quadtree of external tilesets:
 //
-// `refine: ADD` keeps parents visible as children stream in, so the
-// large-vs-small split between zooms composes into the full set.
+//   /tileset.json (root, world bbox, unversioned)
+//      ↓ single external child
+//   /:impl/sub/0/0/0/tileset.json (covers world)
+//      ↓ 4 external children at z=1
+//   /:impl/sub/1/{x}/{y}/tileset.json
+//      ↓ … recurse until z = LEAF_PARENT_Z (= MIN_Z - 1)
+//   /:impl/sub/{LEAF_PARENT_Z}/{x}/{y}/tileset.json
+//      → inline: 4 z=MIN_Z children + their z=MAX_Z grandchildren
+//
+// Cesium fetches sub-tilesets lazily based on view, so a streetside view
+// pays for at most LEAF_PARENT_Z + 1 sequential tileset fetches; an edge
+// cache hit makes that ~ms each.
 
-const HEIGHT_MIN = 0;
-const HEIGHT_MAX = 200;
-const GE_ROOT = 500;
-const GE_PARENT = 100;
-const GE_LEAF = 0;
+const WORLD_REGION = [
+  toRad(-180),
+  toRad(-85.0511287798),
+  toRad(180),
+  toRad(85.0511287798),
+  HEIGHT_MIN_M,
+  HEIGHT_MAX_M,
+];
 
-const DEFAULT_BBOX = { w: 139.65, s: 35.62, e: 139.85, n: 35.78 };
-
-const toRad = (d: number) => (d * Math.PI) / 180;
-const lonToX = (lon: number, z: number) => Math.floor(((lon + 180) / 360) * 2 ** z);
-const latToY = (lat: number, z: number) => {
-  const r = (lat * Math.PI) / 180;
-  return Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * 2 ** z);
-};
-const xToLon = (x: number, z: number) => (x / 2 ** z) * 360 - 180;
-const yToLat = (y: number, z: number) => {
-  const n = Math.PI - (2 * Math.PI * y) / 2 ** z;
-  return (180 / Math.PI) * Math.atan((Math.exp(n) - Math.exp(-n)) / 2);
-};
+const COPYRIGHT = "© OpenStreetMap contributors";
 
 interface Tile {
   boundingVolume: { region: number[] };
   geometricError: number;
-  content?: { uri: string };
   refine?: "ADD" | "REPLACE";
+  content?: { uri: string };
   children?: Tile[];
 }
 
-function tileNode(z: number, x: number, y: number, ge: number): Tile {
-  const w = xToLon(x, z);
-  const e = xToLon(x + 1, z);
-  const n = yToLat(y, z);
-  const s = yToLat(y + 1, z);
-  return {
-    boundingVolume: {
-      region: [toRad(w), toRad(s), toRad(e), toRad(n), HEIGHT_MIN, HEIGHT_MAX],
-    },
-    geometricError: ge,
-    content: { uri: `/${IMPL_VERSION}/${z}/${x}/${y}.glb` },
-  };
-}
-
-export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
-  const q = c.req.query();
-  const bbox = {
-    w: q.w ? Number(q.w) : DEFAULT_BBOX.w,
-    s: q.s ? Number(q.s) : DEFAULT_BBOX.s,
-    e: q.e ? Number(q.e) : DEFAULT_BBOX.e,
-    n: q.n ? Number(q.n) : DEFAULT_BBOX.n,
-  };
-
-  const px0 = lonToX(bbox.w, MIN_Z);
-  const px1 = lonToX(bbox.e, MIN_Z);
-  const pyTop = latToY(bbox.n, MIN_Z);
-  const pyBot = latToY(bbox.s, MIN_Z);
-
-  const parents: Tile[] = [];
-  const factor = 2 ** (MAX_Z - MIN_Z);
-  for (let px = px0; px <= px1; px++) {
-    for (let py = pyTop; py <= pyBot; py++) {
-      const parent = tileNode(MIN_Z, px, py, GE_PARENT);
-      // ADD: children stream in on top of parent.
-      // REPLACE: parent is hidden once any child is loaded.
-      parent.refine = refineFor(MIN_Z);
-      const children: Tile[] = [];
-      for (let dx = 0; dx < factor; dx++) {
-        for (let dy = 0; dy < factor; dy++) {
-          children.push(tileNode(MAX_Z, px * factor + dx, py * factor + dy, GE_LEAF));
-        }
-      }
-      parent.children = children;
-      parents.push(parent);
-    }
-  }
-
-  const body = JSON.stringify({
-    asset: { version: "1.1", copyright: "© OpenStreetMap contributors" },
-    geometricError: GE_ROOT,
-    root: {
-      boundingVolume: {
-        region: [
-          toRad(bbox.w),
-          toRad(bbox.s),
-          toRad(bbox.e),
-          toRad(bbox.n),
-          HEIGHT_MIN,
-          HEIGHT_MAX,
-        ],
-      },
-      geometricError: GE_ROOT,
-      // Root is always ADD: multiple top-level parents must coexist.
-      refine: "ADD",
-      children: parents,
-    },
-  });
-
-  return new Response(body, {
+const jsonResponse = (body: unknown, cacheControl: string, etag: string) =>
+  new Response(JSON.stringify(body), {
     headers: {
       "content-type": "application/json",
-      "cache-control": "public, max-age=3600",
-      etag: `"${IMPL_VERSION}-${bbox.w},${bbox.s},${bbox.e},${bbox.n}"`,
+      "cache-control": cacheControl,
+      etag,
       "access-control-allow-origin": "*",
     },
   });
+
+/**
+ * Unversioned root tileset. Tiny, refreshes hourly so a new IMPL_VERSION
+ * deploy propagates without waiting on the immutable child tilesets.
+ */
+export const tilesetJson = (_c: Context<{ Bindings: Env }>) => {
+  const body = {
+    asset: { version: "1.1", copyright: COPYRIGHT },
+    geometricError: geometricErrorFor(0) * 2,
+    root: {
+      boundingVolume: { region: WORLD_REGION },
+      geometricError: geometricErrorFor(0),
+      refine: "ADD",
+      content: { uri: `/${IMPL_VERSION}/sub/0/0/0/tileset.json` },
+    },
+  };
+  return jsonResponse(body, "public, max-age=3600", `"${IMPL_VERSION}-root"`);
 };
+
+/**
+ * Versioned sub-tileset at (z, x, y). Immutable for a given IMPL_VERSION
+ * because its content depends only on the tile coord and the renderer
+ * convention — bumping IMPL_VERSION moves it to a new URL.
+ */
+export const subTilesetJson = (c: Context<{ Bindings: Env }>) => {
+  if (c.req.param("impl") !== IMPL_VERSION) {
+    return c.text("unknown impl version — re-fetch /tileset.json", 410);
+  }
+  const z = Number(c.req.param("z"));
+  const x = Number(c.req.param("x"));
+  const y = Number(c.req.param("y"));
+  if (!Number.isFinite(z) || !Number.isFinite(x) || !Number.isFinite(y)) {
+    return c.text("bad tile coord", 400);
+  }
+  if (z < 0 || z > LEAF_PARENT_Z) {
+    return c.text(`only z=0..${LEAF_PARENT_Z} is served`, 404);
+  }
+
+  const root: Tile = {
+    boundingVolume: { region: tileRegion(z, x, y, HEIGHT_MIN_M, HEIGHT_MAX_M) },
+    geometricError: geometricErrorFor(z),
+    refine: "ADD",
+  };
+
+  if (z < LEAF_PARENT_Z) {
+    // Pure navigation node: 4 quad children, each in its own tileset shard.
+    root.children = [
+      [2 * x, 2 * y],
+      [2 * x + 1, 2 * y],
+      [2 * x, 2 * y + 1],
+      [2 * x + 1, 2 * y + 1],
+    ].map(([cx, cy]) => ({
+      boundingVolume: { region: tileRegion(z + 1, cx!, cy!, HEIGHT_MIN_M, HEIGHT_MAX_M) },
+      geometricError: geometricErrorFor(z + 1),
+      content: { uri: `/${IMPL_VERSION}/sub/${z + 1}/${cx}/${cy}/tileset.json` },
+    }));
+  } else {
+    // z == LEAF_PARENT_Z: enumerate concrete glb leaves.
+    root.children = leafChildren(x, y);
+  }
+
+  const body = {
+    asset: { version: "1.1", copyright: COPYRIGHT },
+    geometricError: geometricErrorFor(z) * 2,
+    root,
+  };
+  return jsonResponse(
+    body,
+    "public, max-age=2592000, immutable",
+    `"${IMPL_VERSION}-sub-${z}-${x}-${y}"`,
+  );
+};
+
+/**
+ * Inline subtree for a (LEAF_PARENT_Z, X, Y) cell: 4 z=MIN_Z children,
+ * each carrying 4 z=MAX_Z grandchildren. The whole cluster gets emitted
+ * in a single response so Cesium doesn't need yet another round trip
+ * before it can start streaming glbs.
+ */
+function leafChildren(parentX: number, parentY: number): Tile[] {
+  const minZ = MIN_Z;
+  const maxZ = MAX_Z;
+  const out: Tile[] = [];
+  for (let dx = 0; dx < 2; dx++) {
+    for (let dy = 0; dy < 2; dy++) {
+      const mx = 2 * parentX + dx;
+      const my = 2 * parentY + dy;
+      const grandchildren: Tile[] = [];
+      for (let ex = 0; ex < 2; ex++) {
+        for (let ey = 0; ey < 2; ey++) {
+          const lx = 2 * mx + ex;
+          const ly = 2 * my + ey;
+          grandchildren.push({
+            boundingVolume: { region: tileRegion(maxZ, lx, ly, HEIGHT_MIN_M, HEIGHT_MAX_M) },
+            geometricError: geometricErrorFor(maxZ),
+            content: { uri: `/${IMPL_VERSION}/${maxZ}/${lx}/${ly}.glb` },
+          });
+        }
+      }
+      out.push({
+        boundingVolume: { region: tileRegion(minZ, mx, my, HEIGHT_MIN_M, HEIGHT_MAX_M) },
+        geometricError: geometricErrorFor(minZ),
+        refine: refineFor(minZ),
+        content: { uri: `/${IMPL_VERSION}/${minZ}/${mx}/${my}.glb` },
+        children: grandchildren,
+      });
+    }
+  }
+  return out;
+}
