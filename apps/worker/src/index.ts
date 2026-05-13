@@ -10,13 +10,11 @@ const app = new Hono<{ Bindings: Env }>();
 app.get("/", viewerHtml);
 app.get("/healthz", (c) => c.text("ok"));
 
-// Unversioned entry tileset; small, short cache so a deploy can change
-// which IMPL_VERSION-prefixed sub-tileset it points at.
-app.get(
-  "/tileset.json",
-  cache({ cacheName: "tileset-root", cacheControl: "public, max-age=3600" }),
-  tilesetJson,
-);
+// Unversioned entry tileset. Skip the edge cache middleware so a deploy
+// that changes IMPL_VERSION takes effect immediately for browsers
+// revalidating against the worker. The route hands out its own short
+// `Cache-Control` with `must-revalidate` (see routes/tileset.ts).
+app.get("/tileset.json", tilesetJson);
 
 // Versioned navigation tilesets — immutable for a given IMPL_VERSION, so
 // edge cache can hold them aggressively. Hono's cache middleware keys by

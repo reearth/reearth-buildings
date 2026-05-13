@@ -57,7 +57,17 @@ const jsonResponse = (body: unknown, cacheControl: string, etag: string) =>
   });
 
 /** Unversioned root tileset. */
-export const tilesetJson = (_c: Context<{ Bindings: Env }>) => {
+export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
+  const etag = `"${IMPL_VERSION}-root"`;
+  if (c.req.header("if-none-match") === etag) {
+    return new Response(null, {
+      status: 304,
+      headers: {
+        etag,
+        "cache-control": "public, max-age=60, must-revalidate",
+      },
+    });
+  }
   const body = {
     asset: { version: "1.1", copyright: COPYRIGHT },
     geometricError: geometricErrorFor(0) * 2,
@@ -68,7 +78,12 @@ export const tilesetJson = (_c: Context<{ Bindings: Env }>) => {
       content: { uri: `/${IMPL_VERSION}/sub/0/0/0/tileset.json` },
     },
   };
-  return jsonResponse(body, "public, max-age=3600", `"${IMPL_VERSION}-root"`);
+  // Short freshness + must-revalidate: clients still hit the worker
+  // every minute or so, but ETag means an unchanged IMPL_VERSION costs
+  // them only a 304. When IMPL_VERSION moves the URL contents change,
+  // the ETag changes, and clients pick up the new sub-tileset prefix
+  // without needing a manual hard reload.
+  return jsonResponse(body, "public, max-age=60, must-revalidate", `"${IMPL_VERSION}-root"`);
 };
 
 /** Versioned sub-tileset at (z, x, y). */
