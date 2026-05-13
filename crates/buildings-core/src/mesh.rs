@@ -59,9 +59,11 @@ pub fn default_height_meters(feat: &BuildingFeature) -> f64 {
         (Some(h), _) if h > 0.0 => h,
         (_, Some(l)) if l > 0.0 => l * 3.0,
         // Tokyo OSM data rarely tags small commercial / residential
-        // buildings, so the fallback dominates downtown views. 9 m
-        // (≈ three floors) reads as built-up rather than a flat slab.
-        _ => 9.0,
+        // buildings, so the fallback dominates downtown views. 12 m
+        // (≈ four floors) keeps the cityscape recognisable at distance.
+        // Category-based heuristics from `building` / `kind` are a
+        // future refinement.
+        _ => 12.0,
     }
 }
 

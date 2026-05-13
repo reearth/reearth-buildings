@@ -46,10 +46,13 @@ export const HEIGHT_MAX_M = 1000;
 /** Geometric error (worst-case deviation in metres) for a tile at zoom z. */
 export function geometricErrorFor(z: number): number {
   if (z >= MAX_Z) return 0;
-  // 40 075 017 m ≈ Earth circumference at the equator → tile width at z.
-  // Dividing further by 100 produces values matching common Cesium defaults
-  // (root ~400 km, z=12 ~100 m, z=13 ~50 m).
-  return 40_075_017 / 2 ** z / 100;
+  // Tile width at z divided by 30. Earlier we used /100 but tiles only
+  // popped in from ~5 km, which was way too close — Tokyo skyscrapers
+  // disappeared as soon as you pulled the camera back. /30 keeps z=13
+  // streaming until ~16 km away and z=12 navigation tiles still trigger
+  // their children from ~30 km, matching the distance at which Cesium
+  // Ion buildings stay visible.
+  return 40_075_017 / 2 ** z / 30;
 }
 
 /** Footprint cutoff between z=13 and z=14 in ADD mode. Ignored in REPLACE. */
