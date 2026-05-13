@@ -34,12 +34,14 @@ export const MAX_Z = 14;
 export const LEAF_PARENT_Z = MIN_Z - 1;
 
 /**
- * Maximum height the rendered glb buildings can reach. Used in tileset
- * bounding-volume regions so Cesium's culling is generous enough for
- * downtown skyscrapers.
+ * Vertical extent declared in every tile's bounding region. We err on the
+ * generous side (1 000 m) so even the tallest extrusions stay inside the
+ * Cesium-side culling volume — actual roof heights come from the OSM
+ * `height` tag and rarely exceed 350 m, but a 200 m clamp was tight
+ * enough that downtown landmark tiles got clipped during frustum tests.
  */
 export const HEIGHT_MIN_M = 0;
-export const HEIGHT_MAX_M = 200;
+export const HEIGHT_MAX_M = 1000;
 
 /** Geometric error (worst-case deviation in metres) for a tile at zoom z. */
 export function geometricErrorFor(z: number): number {

@@ -4,11 +4,10 @@ import type { Context } from "hono";
 // the OpenStreetMap basemap (no Ion token required). Camera initial state
 // is overridable via query params:
 //   /?lon=139.7&lat=35.68&height=2000&heading=0&pitch=-30
+// Add `?debug=1` to draw tileset bounding volumes and surface tile errors
+// in the status panel.
 //
 // Building click reveals attributes via a tiny side panel.
-//
-// The HTML is intentionally a single embedded string so the worker
-// doesn't need an asset binding to serve it.
 
 const HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -19,32 +18,35 @@ const HTML = `<!DOCTYPE html>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.123/Build/Cesium/Widgets/widgets.css" />
 <style>
   html, body, #app { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
-  #panel {
-    position: absolute; top: 12px; right: 12px; max-width: 320px;
-    background: rgba(20, 22, 28, 0.92); color: #fff; padding: 12px 14px;
-    border-radius: 8px; font: 13px/1.45 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.3); display: none;
+  .overlay {
+    position: absolute; background: rgba(20, 22, 28, 0.92); color: #fff;
+    padding: 10px 12px; border-radius: 8px;
+    font: 12px/1.45 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
   }
+  #panel { top: 12px; right: 12px; max-width: 320px; display: none; }
   #panel h2 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: #9fd1ff; }
   #panel dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; }
   #panel dt { color: #8b95a4; }
   #panel dd { margin: 0; word-break: break-all; }
-  #hint {
-    position: absolute; bottom: 12px; left: 12px;
-    background: rgba(20, 22, 28, 0.85); color: #cfd6e0; padding: 6px 10px;
-    border-radius: 6px; font: 12px -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-    pointer-events: none;
-  }
+  #status { bottom: 12px; left: 12px; max-width: 360px; }
+  #status .row { margin-top: 2px; color: #cfd6e0; }
+  #status .err { color: #ff8e8e; }
+  #status .pill { display: inline-block; min-width: 30px; padding: 1px 6px; margin-right: 6px;
+                  background: #2a2f3a; border-radius: 99px; text-align: center; }
 </style>
 </head>
 <body>
 <div id="app"></div>
-<div id="panel"><h2 id="panel-title">Building</h2><dl id="panel-body"></dl></div>
-<div id="hint">click a building to inspect its properties</div>
+<div id="panel" class="overlay"><h2 id="panel-title">Building</h2><dl id="panel-body"></dl></div>
+<div id="status" class="overlay">
+  <div><span class="pill" id="loaded">0</span>tiles loaded</div>
+  <div><span class="pill" id="failed">0</span>tiles failed</div>
+  <div class="row" id="last-error"></div>
+</div>
 <script type="module">
   import * as Cesium from "https://cdn.jsdelivr.net/npm/cesium@1.123/Build/Cesium/index.js";
 
-  // Surface the asset bundle path Cesium needs for its own static files.
   window.CESIUM_BASE_URL = "https://cdn.jsdelivr.net/npm/cesium@1.123/Build/Cesium/";
 
   const params = new URLSearchParams(location.search);
@@ -53,21 +55,17 @@ const HTML = `<!DOCTYPE html>
   const height = Number(params.get("height") ?? 1500);
   const heading = Number(params.get("heading") ?? 0);
   const pitch = Number(params.get("pitch") ?? -30);
+  const debug = params.get("debug") === "1";
+  const sse = Number(params.get("sse") ?? 16);
 
   const viewer = new Cesium.Viewer("app", {
     baseLayer: Cesium.ImageryLayer.fromProviderAsync(
       Promise.resolve(new Cesium.OpenStreetMapImageryProvider({ url: "https://tile.openstreetmap.org/" })),
     ),
-    baseLayerPicker: false,
-    geocoder: false,
-    homeButton: false,
-    sceneModePicker: false,
-    navigationHelpButton: false,
-    timeline: false,
-    animation: false,
-    fullscreenButton: false,
+    baseLayerPicker: false, geocoder: false, homeButton: false,
+    sceneModePicker: false, navigationHelpButton: false,
+    timeline: false, animation: false, fullscreenButton: false,
   });
-  viewer.scene.globe.depthTestAgainstTerrain = false;
   viewer.camera.setView({
     destination: Cesium.Cartesian3.fromDegrees(lon, lat, height),
     orientation: {
@@ -77,13 +75,30 @@ const HTML = `<!DOCTYPE html>
     },
   });
 
+  const loadedEl = document.getElementById("loaded");
+  const failedEl = document.getElementById("failed");
+  const lastErrorEl = document.getElementById("last-error");
+  let loaded = 0, failed = 0;
+
   const tileset = await Cesium.Cesium3DTileset.fromUrl("/tileset.json", {
-    maximumScreenSpaceError: 16,
-    skipLevelOfDetail: true,
+    maximumScreenSpaceError: sse,
+    debugShowBoundingVolume: debug,
   });
   viewer.scene.primitives.add(tileset);
 
-  // Feature picking.
+  tileset.tileLoad.addEventListener(() => {
+    loaded++;
+    loadedEl.textContent = String(loaded);
+  });
+  tileset.tileFailed.addEventListener((event) => {
+    failed++;
+    failedEl.textContent = String(failed);
+    const url = event.url ?? "(unknown)";
+    const msg = event.message ?? "(no message)";
+    lastErrorEl.innerHTML = '<span class="err">' + url + '<br/>' + msg + '</span>';
+    console.error("tile failed:", url, msg);
+  });
+
   const panel = document.getElementById("panel");
   const panelTitle = document.getElementById("panel-title");
   const panelBody = document.getElementById("panel-body");
