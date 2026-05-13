@@ -68,13 +68,13 @@ pub fn build_mesh(z: u8, x: u32, y: u32, tile: &DecodedTile) -> Mesh {
         };
         features.push(props);
 
-        for ring in &feat.rings {
-            extrude_ring(
+        for polygon in group_polygons(&feat.rings) {
+            extrude_polygon(
                 z,
                 x,
                 y,
                 tile.extent,
-                ring,
+                &polygon,
                 min_h,
                 height,
                 fid,
@@ -94,13 +94,69 @@ pub fn build_mesh(z: u8, x: u32, y: u32, tile: &DecodedTile) -> Mesh {
     }
 }
 
+/// One outer ring with zero or more holes. All vertex coords are in tile
+/// units; the closing duplicate vertex (when present) has been stripped.
+struct Polygon<'a> {
+    outer: Vec<[i32; 2]>,
+    holes: Vec<Vec<[i32; 2]>>,
+    _marker: std::marker::PhantomData<&'a ()>,
+}
+
+/// Group MVT rings into polygons using the signed-area sign convention
+/// (spec §4.3.4.4): A > 0 in tile coords starts a new outer ring; A < 0
+/// is a hole attached to the most recent outer.
+fn group_polygons(rings: &[Vec<[i32; 2]>]) -> Vec<Polygon<'static>> {
+    let mut out: Vec<Polygon<'static>> = Vec::new();
+    for raw in rings {
+        let r = strip_close(raw);
+        if r.len() < 3 {
+            continue;
+        }
+        let area = signed_area_tile(&r);
+        if area > 0.0 {
+            out.push(Polygon {
+                outer: r,
+                holes: Vec::new(),
+                _marker: std::marker::PhantomData,
+            });
+        } else if let Some(last) = out.last_mut() {
+            last.holes.push(r);
+        }
+        // A hole that arrives before any outer ring is malformed; drop it.
+    }
+    out
+}
+
+fn strip_close(ring: &[[i32; 2]]) -> Vec<[i32; 2]> {
+    if ring.len() >= 2 && ring.first() == ring.last() {
+        ring[..ring.len() - 1].to_vec()
+    } else {
+        ring.to_vec()
+    }
+}
+
+/// Surveyor's formula on tile coordinates (Y-down). Positive area → MVT
+/// exterior ring; negative → interior hole.
+fn signed_area_tile(ring: &[[i32; 2]]) -> f64 {
+    if ring.len() < 3 {
+        return 0.0;
+    }
+    let mut a: f64 = 0.0;
+    for i in 0..ring.len() {
+        let p = ring[i];
+        let q = ring[(i + 1) % ring.len()];
+        a += (p[0] as f64) * (q[1] as f64) - (q[0] as f64) * (p[1] as f64);
+    }
+    0.5 * a
+}
+
 #[allow(clippy::too_many_arguments)]
-fn extrude_ring(
+fn extrude_polygon(
     z: u8,
     tx: u32,
     ty: u32,
     extent: u32,
-    ring: &[[i32; 2]],
+    polygon: &Polygon<'_>,
     base_height: f64,
     top_height: f64,
     fid: u16,
@@ -109,33 +165,51 @@ fn extrude_ring(
     feature_ids: &mut Vec<u16>,
     indices: &mut Vec<u32>,
 ) {
-    if ring.len() < 4 {
-        return;
-    }
-    let ring_no_close = if ring.first() == ring.last() {
-        &ring[..ring.len() - 1]
-    } else {
-        ring
-    };
-    if ring_no_close.len() < 3 {
-        return;
-    }
-
-    let enu: Vec<[f64; 2]> = ring_no_close
+    // ----- roof (with holes) -----
+    let outer_enu: Vec<[f64; 2]> = polygon
+        .outer
         .iter()
         .map(|p| coord::tile_xy_to_enu(z, tx, ty, extent, p[0], p[1]))
         .collect();
+    let hole_enus: Vec<Vec<[f64; 2]>> = polygon
+        .holes
+        .iter()
+        .map(|h| {
+            h.iter()
+                .map(|p| coord::tile_xy_to_enu(z, tx, ty, extent, p[0], p[1]))
+                .collect()
+        })
+        .collect();
 
-    // ----- roof (top cap) -----
-    let mut flat: Vec<f64> = Vec::with_capacity(enu.len() * 2);
-    for p in &enu {
+    let mut flat: Vec<f64> = Vec::new();
+    for p in &outer_enu {
         flat.push(p[0]);
         flat.push(p[1]);
     }
-    let roof_tris = earcutr::earcut(&flat, &[], 2).unwrap_or_default();
+    let mut hole_indices: Vec<usize> = Vec::with_capacity(hole_enus.len());
+    let mut running = outer_enu.len();
+    for h in &hole_enus {
+        if h.len() < 3 {
+            continue;
+        }
+        hole_indices.push(running);
+        for p in h {
+            flat.push(p[0]);
+            flat.push(p[1]);
+        }
+        running += h.len();
+    }
+    let roof_tris = earcutr::earcut(&flat, &hole_indices, 2).unwrap_or_default();
+
     if !roof_tris.is_empty() {
+        // Push all vertices used by earcut (outer + holes) in the same order.
         let base = positions.len() as u32 / 3;
-        for p in &enu {
+        let mut all_pts: Vec<[f64; 2]> = Vec::with_capacity(running);
+        all_pts.extend_from_slice(&outer_enu);
+        for h in &hole_enus {
+            all_pts.extend_from_slice(h);
+        }
+        for p in &all_pts {
             positions.extend_from_slice(&[p[0] as f32, top_height as f32, -p[1] as f32]);
             normals.extend_from_slice(&[0.0, 1.0, 0.0]);
             feature_ids.push(fid);
@@ -147,15 +221,69 @@ fn extrude_ring(
         }
     }
 
-    // ----- walls -----
+    // ----- walls (outer ring + every hole ring) -----
+    extrude_ring_walls(
+        &outer_enu,
+        base_height,
+        top_height,
+        fid,
+        positions,
+        normals,
+        feature_ids,
+        indices,
+    );
+    for h in &hole_enus {
+        extrude_ring_walls(
+            h,
+            base_height,
+            top_height,
+            fid,
+            positions,
+            normals,
+            feature_ids,
+            indices,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn extrude_ring_walls(
+    enu: &[[f64; 2]],
+    base_height: f64,
+    top_height: f64,
+    fid: u16,
+    positions: &mut Vec<f32>,
+    normals: &mut Vec<f32>,
+    feature_ids: &mut Vec<u16>,
+    indices: &mut Vec<u32>,
+) {
+    if enu.len() < 3 {
+        return;
+    }
+    // Walls assume CW traversal in (east, north): MVT outer rings already
+    // arrive in this orientation (positive tile-area = CW after the y-flip
+    // to north). Holes arrive CCW; reverse them so the wall's outward face
+    // points into the courtyard, not into the solid material.
+    let mut a_enu = 0.0;
+    for i in 0..enu.len() {
+        let p = enu[i];
+        let q = enu[(i + 1) % enu.len()];
+        a_enu += p[0] * q[1] - q[0] * p[1];
+    }
+    let ring: Vec<[f64; 2]> = if a_enu > 0.0 {
+        enu.iter().rev().copied().collect()
+    } else {
+        enu.to_vec()
+    };
+    let enu = &ring[..];
     for i in 0..enu.len() {
         let a = enu[i];
         let b = enu[(i + 1) % enu.len()];
         let dx = b[0] - a[0];
         let dz_n = b[1] - a[1];
         let len = (dx * dx + dz_n * dz_n).sqrt().max(1e-9);
-        let nx = (dz_n) / len;
-        let nz = (-dx) / len;
+        let nx = dz_n / len;
+        let nz = -dx / len;
         let base = positions.len() as u32 / 3;
         let verts = [
             [a[0] as f32, base_height as f32, -a[1] as f32],
