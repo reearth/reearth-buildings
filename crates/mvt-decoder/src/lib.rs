@@ -20,12 +20,19 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Clone, Default)]
 pub struct BuildingFeature {
+    /// MVT feature id (varies by source; OSM tilers usually put the OSM way/relation id here).
+    pub id: Option<u64>,
     /// One or more closed rings in tile-local coordinates (origin at NW of
     /// the tile, x→E, y→S). Each ring's first and last vertex are equal.
     pub rings: Vec<Vec<[i32; 2]>>,
     pub height: Option<f64>,
     pub min_height: Option<f64>,
     pub levels: Option<f64>,
+    pub name: Option<String>,
+    /// Coarse category from the tiler (e.g. Protomaps "kind": apartments, school, ...).
+    pub kind: Option<String>,
+    /// Raw OSM `building` tag value.
+    pub building: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -115,11 +122,12 @@ fn decode_feature(
     let mut tag_pairs: Vec<u32> = Vec::new();
     let mut geometry: Vec<u32> = Vec::new();
 
+    let mut feat_id: Option<u64> = None;
     while !p.is_eof() {
         let (field, wt) = p.read_tag()?;
         match (field, wt) {
             (1, 0) => {
-                let _ = p.read_varint()?;
+                feat_id = Some(p.read_varint()?);
             }
             (2, 2) => {
                 let raw = p.read_bytes()?;
@@ -150,6 +158,7 @@ fn decode_feature(
     }
 
     let mut feat = BuildingFeature {
+        id: feat_id,
         rings,
         ..Default::default()
     };
@@ -167,6 +176,9 @@ fn decode_feature(
             "height" => feat.height = value.as_f64(),
             "min_height" => feat.min_height = value.as_f64(),
             "building:levels" | "levels" => feat.levels = value.as_f64(),
+            "name" => feat.name = value.as_string(),
+            "kind" | "class" => feat.kind = value.as_string(),
+            "building" => feat.building = value.as_string(),
             _ => {}
         }
     }
@@ -235,7 +247,7 @@ enum Value {
     F64(f64),
     I64(i64),
     U64(u64),
-    Bool(bool),
+    Bool(#[allow(dead_code)] bool),
     None,
 }
 
@@ -247,6 +259,12 @@ impl Value {
             Value::I64(v) => Some(*v as f64),
             Value::U64(v) => Some(*v as f64),
             Value::Str(s) => s.parse().ok(),
+            _ => None,
+        }
+    }
+    fn as_string(&self) -> Option<String> {
+        match self {
+            Value::Str(s) => Some(s.clone()),
             _ => None,
         }
     }
