@@ -42,6 +42,10 @@ pub fn render_glb_lod(
     // every building's base on the geoid (mean sea level) so glbs sit
     // at the right altitude relative to Cesium terrain.
     geoid_offset_m: f32,
+    // When true, every polygon is collapsed to its axis-aligned bounding
+    // rectangle before extrusion. Produces a "block mesh" silhouette for
+    // the coarsest LOD level without invoking meshopt simplify.
+    aabb_only: bool,
 ) -> Result<Bytes> {
     let decoded: Vec<(u8, u32, u32, mvt_decoder::DecodedTile)> = sources
         .iter()
@@ -56,7 +60,7 @@ pub fn render_glb_lod(
             tile: t,
         })
         .collect();
-    let mut mesh = mesh::build_mesh(out_z, out_x, out_y, &mesh_sources, filter);
+    let mut mesh = mesh::build_mesh(out_z, out_x, out_y, &mesh_sources, filter, aabb_only);
 
     if simplify_ratio > 0.0 && simplify_ratio < 1.0 {
         mesh::simplify_mesh(&mut mesh, simplify_ratio, simplify_target_error_m);
@@ -135,6 +139,7 @@ mod tests {
             1.0,
             0.0,
             0.0,
+            false,
         )
         .unwrap();
         assert!(glb.len() > 20);

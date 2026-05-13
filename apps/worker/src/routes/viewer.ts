@@ -89,6 +89,21 @@ const HTML = `<!DOCTYPE html>
     debugShowBoundingVolume: debug,
   });
   viewer.scene.primitives.add(tileset);
+  // Required ODbL attribution for OSM-derived building data, plus the
+  // Protomaps planet build we range-read at upstream. Cesium also
+  // auto-adds its own credit and the OpenStreetMap imagery credit.
+  viewer.creditDisplay.addStaticCredit(
+    new Cesium.Credit(
+      'Building footprints © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a> (ODbL)',
+      true,
+    ),
+  );
+  viewer.creditDisplay.addStaticCredit(
+    new Cesium.Credit(
+      'Vector tiles by <a href="https://protomaps.com/" target="_blank" rel="noopener">Protomaps</a>',
+      true,
+    ),
+  );
   // Expose for debugging via DevTools console.
   window.viewer = viewer;
   window.tileset = tileset;

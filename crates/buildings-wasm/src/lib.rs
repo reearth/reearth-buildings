@@ -83,6 +83,7 @@ pub fn render_glb_lod(
     simplify_ratio: f32,
     simplify_target_error_m: f32,
     geoid_offset_m: f32,
+    aabb_only: bool,
 ) -> std::result::Result<Vec<u8>, JsError> {
     ensure_init();
     if mvt_lens.len() * 3 != src_tiles.len() {
@@ -118,6 +119,7 @@ pub fn render_glb_lod(
         simplify_ratio,
         simplify_target_error_m,
         geoid_offset_m,
+        aabb_only,
     )
     .map_err(|e| JsError::new(&e.to_string()))?;
     Ok(bytes.into())

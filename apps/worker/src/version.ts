@@ -15,7 +15,9 @@ import { LOD_MODE } from "./lod";
  * meaning of the geometry at every zoom, so a flip must invalidate the
  * whole URL space.
  */
-const RENDERER_VERSION = "v1";
+// v2: introduced z=12 mega-landmark layer, restructured leaf subtree
+// (LEAF_PARENT_Z = 11). All earlier URL paths no longer make sense.
+const RENDERER_VERSION = "v2";
 export const IMPL_VERSION = `${RENDERER_VERSION}-${LOD_MODE}`;
 
 /**

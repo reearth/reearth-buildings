@@ -87,6 +87,7 @@ pub fn build_mesh(
     out_y: u32,
     sources: &[Source<'_>],
     filter: AreaFilter,
+    aabb_only: bool,
 ) -> Mesh {
     let anchor = coord::tile_center(out_z, out_x, out_y);
 
@@ -102,6 +103,11 @@ pub fn build_mesh(
             }
             for polygon in polygons {
                 let area = polygon_area_m2(&polygon, source, source.tile.extent) as f32;
+                let polygon = if aabb_only {
+                    polygon_to_aabb(&polygon)
+                } else {
+                    polygon
+                };
                 let fragment = Fragment {
                     source_idx: src_idx,
                     polygon,
@@ -225,6 +231,39 @@ fn group_polygons(rings: &[Vec<[i32; 2]>]) -> Vec<Polygon> {
         }
     }
     out
+}
+
+/// Replace a polygon with its axis-aligned bounding rectangle. The
+/// resulting block silhouette has 4 vertices and no holes, which keeps
+/// the coarsest LOD level cheap to render (≈12 triangles per building).
+fn polygon_to_aabb(polygon: &Polygon) -> Polygon {
+    let mut min_x = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut min_y = i32::MAX;
+    let mut max_y = i32::MIN;
+    for p in &polygon.outer {
+        if p[0] < min_x {
+            min_x = p[0];
+        }
+        if p[0] > max_x {
+            max_x = p[0];
+        }
+        if p[1] < min_y {
+            min_y = p[1];
+        }
+        if p[1] > max_y {
+            max_y = p[1];
+        }
+    }
+    Polygon {
+        outer: vec![
+            [min_x, min_y],
+            [max_x, min_y],
+            [max_x, max_y],
+            [min_x, max_y],
+        ],
+        holes: vec![],
+    }
 }
 
 fn strip_close(ring: &[[i32; 2]]) -> Vec<[i32; 2]> {

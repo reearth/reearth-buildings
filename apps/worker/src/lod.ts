@@ -1,87 +1,88 @@
 // LOD configuration shared between the glb route and tileset.json.
 //
-// Two modes, switched by LOD_MODE:
+// Three content zooms with size-based bucketing under refine: ADD —
+// every building is rendered at exactly one zoom level, and the three
+// layers compose without overlap:
 //
-//   "add"     — refine: ADD. z=13 holds only large buildings, z=14 only
-//               small ones. The two layers compose at full zoom without
-//               overlap. Best when you want every building rendered at
-//               its original geometry detail.
+//   z=12  mega landmarks         (footprint ≥ MEGA_M2)
+//   z=13  large buildings        (THRESHOLD_M2 ≤ footprint < MEGA_M2)
+//   z=14  everything smaller     (footprint < THRESHOLD_M2)
 //
-//   "replace" — refine: REPLACE. z=13 holds every building, simplified
-//               for distance. z=14 holds every building at full detail
-//               and replaces the parent when loaded. Best when you want
-//               the parent layer to be light at the cost of redundant
-//               data on the wire.
+// REPLACE mode renders all buildings at every zoom, simplified more
+// aggressively the further out you go, and the deeper zoom replaces
+// the coarser one when it streams in.
 //
-// Switching modes silently would mix tileset.json contents (refine value)
-// with the corresponding glb payloads (different filter / simplify). To
-// keep caches honest we suffix IMPL_VERSION with the mode (see
-// version.ts) — flipping LOD_MODE atomically invalidates every layer.
+// Toggle modes via LOD_MODE; IMPL_VERSION encodes it so flipping
+// invalidates every cache layer atomically.
 
 export type LodMode = "add" | "replace";
 export const LOD_MODE: LodMode = "add";
 
-export const MIN_Z = 13;
+export const MIN_Z = 12;
 export const MAX_Z = 14;
 
-/**
- * Recursion break in the quadtree of external sub-tilesets. Sub-tilesets
- * at z < LEAF_PARENT_Z list four external children at z+1; sub-tilesets
- * at z = LEAF_PARENT_Z enumerate the concrete z=MIN_Z and z=MAX_Z glb
- * tiles inline. Set to MIN_Z - 1 so the deepest navigation level sits
- * one above the real glb leaves.
- */
+/** Recursive break in the navigation quadtree. */
 export const LEAF_PARENT_Z = MIN_Z - 1;
 
-/**
- * Vertical extent declared in every tile's bounding region. We err on the
- * generous side (1 000 m) so even the tallest extrusions stay inside the
- * Cesium-side culling volume — actual roof heights come from the OSM
- * `height` tag and rarely exceed 350 m, but a 200 m clamp was tight
- * enough that downtown landmark tiles got clipped during frustum tests.
- */
+/** Vertical envelope declared in tileset bounding regions. */
 export const HEIGHT_MIN_M = 0;
 export const HEIGHT_MAX_M = 1000;
 
-/** Geometric error (worst-case deviation in metres) for a tile at zoom z. */
-export function geometricErrorFor(z: number): number {
-  if (z >= MAX_Z) return 0;
-  // Tile width at z divided by 30. Earlier we used /100 but tiles only
-  // popped in from ~5 km, which was way too close — Tokyo skyscrapers
-  // disappeared as soon as you pulled the camera back. /30 keeps z=13
-  // streaming until ~16 km away and z=12 navigation tiles still trigger
-  // their children from ~30 km, matching the distance at which Cesium
-  // Ion buildings stay visible.
-  return 40_075_017 / 2 ** z / 30;
-}
-
-/** Footprint cutoff between z=13 and z=14 in ADD mode. Ignored in REPLACE. */
+/**
+ * Footprint cutoffs (m²) for the ADD-mode size buckets. Tuned for
+ * downtown Tokyo: most buildings fall in the small bucket; large
+ * commercial buildings hit the 2 000 m² tier; only true landmark
+ * footprints (station complexes, big-box, large factories) reach 5 000.
+ */
 export const THRESHOLD_M2 = 2000;
+export const MEGA_M2 = 10000;
 
-/** meshopt simplification applied at z=13 in REPLACE mode. */
-export const SIMPLIFY = {
-  ratio: 0.5,
-  targetErrorM: 5,
-};
+/**
+ * Whether the renderer should collapse each polygon to its axis-aligned
+ * bounding box at this zoom. At the coarsest content level we want a
+ * "block mesh" look — a few triangles per landmark — rather than a full
+ * extruded façade. This is independent of REPLACE-mode mesh simplify
+ * (which only kicks in when LOD_MODE = "replace").
+ */
+export function aabbOnlyAt(z: number): boolean {
+  return z === MIN_Z;
+}
 
 export function refineFor(z: number): "ADD" | "REPLACE" {
   if (LOD_MODE === "add") return "ADD";
-  // In REPLACE mode the parent is hidden when children load; root uses
-  // ADD so multiple top-level parents can coexist.
-  return z === MIN_Z ? "REPLACE" : "ADD";
+  // REPLACE: the parent vanishes when any child streams in. Use REPLACE
+  // on every intermediate zoom so the chain MIN_Z → … → MAX_Z replaces
+  // top-down. Root tiles stay ADD so multiple top-level parents coexist.
+  return z >= MIN_Z && z < MAX_Z ? "REPLACE" : "ADD";
 }
 
 export function areaFilterFor(z: number): { minM2: number; maxM2: number } {
   if (LOD_MODE === "add") {
-    return z === MAX_Z ? { minM2: 0, maxM2: THRESHOLD_M2 } : { minM2: THRESHOLD_M2, maxM2: 0 };
+    if (z >= MAX_Z) return { minM2: 0, maxM2: THRESHOLD_M2 };
+    if (z === MIN_Z) return { minM2: MEGA_M2, maxM2: 0 };
+    // Intermediate (z=13 today): [THRESHOLD, MEGA).
+    return { minM2: THRESHOLD_M2, maxM2: MEGA_M2 };
   }
   // REPLACE: every building at every level.
   return { minM2: 0, maxM2: 0 };
 }
 
 export function simplifyFor(z: number): { ratio: number; targetErrorM: number } {
-  if (LOD_MODE === "replace" && z === MIN_Z) {
-    return { ratio: SIMPLIFY.ratio, targetErrorM: SIMPLIFY.targetErrorM };
+  if (LOD_MODE === "add") {
+    return { ratio: 1, targetErrorM: 0 };
   }
+  // REPLACE: heavier decimation the further out you are.
+  if (z === MIN_Z) return { ratio: 0.25, targetErrorM: 12 };
+  if (z === MIN_Z + 1) return { ratio: 0.5, targetErrorM: 5 };
   return { ratio: 1, targetErrorM: 0 };
+}
+
+/** Geometric error (worst-case deviation in metres) for a tile at zoom z. */
+export function geometricErrorFor(z: number): number {
+  if (z >= MAX_Z) return 0;
+  // Tile width at z divided by 30: z=11 ≈ 650 m, z=12 ≈ 330 m,
+  // z=13 ≈ 165 m. With the default 16-px SSE budget Cesium subdivides
+  // each tier roughly twice as close as the previous one, which keeps
+  // the ADD-mode size buckets streaming in at separate distances.
+  return 40_075_017 / 2 ** z / 30;
 }

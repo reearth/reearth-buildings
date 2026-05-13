@@ -18,10 +18,10 @@ import { IMPL_VERSION } from "../version";
 //      ↓ single external child
 //   /:impl/sub/0/0/0/tileset.json (covers world)
 //      ↓ 4 external children at z=1
-//   /:impl/sub/1/{x}/{y}/tileset.json
+//   /:impl/sub/{Z}/{X}/{Y}/tileset.json
 //      ↓ … recurse until z = LEAF_PARENT_Z (= MIN_Z - 1)
-//   /:impl/sub/{LEAF_PARENT_Z}/{x}/{y}/tileset.json
-//      → inline: 4 z=MIN_Z children + their z=MAX_Z grandchildren
+//   /:impl/sub/{LEAF_PARENT_Z}/{X}/{Y}/tileset.json
+//      → inline: z=MIN_Z..MAX_Z content tiles, refined via the LOD_MODE.
 //
 // Cesium fetches sub-tilesets lazily based on view, so a streetside view
 // pays for at most LEAF_PARENT_Z + 1 sequential tileset fetches; an edge
@@ -36,7 +36,7 @@ const WORLD_REGION = [
   HEIGHT_MAX_M,
 ];
 
-const COPYRIGHT = "© OpenStreetMap contributors";
+const COPYRIGHT = "© OpenStreetMap contributors (ODbL) · tiles by Protomaps";
 
 interface Tile {
   boundingVolume: { region: number[] };
@@ -56,10 +56,7 @@ const jsonResponse = (body: unknown, cacheControl: string, etag: string) =>
     },
   });
 
-/**
- * Unversioned root tileset. Tiny, refreshes hourly so a new IMPL_VERSION
- * deploy propagates without waiting on the immutable child tilesets.
- */
+/** Unversioned root tileset. */
 export const tilesetJson = (_c: Context<{ Bindings: Env }>) => {
   const body = {
     asset: { version: "1.1", copyright: COPYRIGHT },
@@ -74,11 +71,7 @@ export const tilesetJson = (_c: Context<{ Bindings: Env }>) => {
   return jsonResponse(body, "public, max-age=3600", `"${IMPL_VERSION}-root"`);
 };
 
-/**
- * Versioned sub-tileset at (z, x, y). Immutable for a given IMPL_VERSION
- * because its content depends only on the tile coord and the renderer
- * convention — bumping IMPL_VERSION moves it to a new URL.
- */
+/** Versioned sub-tileset at (z, x, y). */
 export const subTilesetJson = (c: Context<{ Bindings: Env }>) => {
   if (c.req.param("impl") !== IMPL_VERSION) {
     return c.text("unknown impl version — re-fetch /tileset.json", 410);
@@ -100,7 +93,7 @@ export const subTilesetJson = (c: Context<{ Bindings: Env }>) => {
   };
 
   if (z < LEAF_PARENT_Z) {
-    // Pure navigation node: 4 quad children, each in its own tileset shard.
+    // Pure navigation: 4 quad children, each in its own external shard.
     root.children = [
       [2 * x, 2 * y],
       [2 * x + 1, 2 * y],
@@ -112,8 +105,13 @@ export const subTilesetJson = (c: Context<{ Bindings: Env }>) => {
       content: { uri: `/${IMPL_VERSION}/sub/${z + 1}/${cx}/${cy}/tileset.json` },
     }));
   } else {
-    // z == LEAF_PARENT_Z: enumerate concrete glb leaves.
-    root.children = leafChildren(x, y);
+    // z == LEAF_PARENT_Z: expand the MIN_Z..MAX_Z subtree inline.
+    root.children = [
+      [2 * x, 2 * y],
+      [2 * x + 1, 2 * y],
+      [2 * x, 2 * y + 1],
+      [2 * x + 1, 2 * y + 1],
+    ].map(([cx, cy]) => buildContentSubtree(MIN_Z, cx!, cy!));
   }
 
   const body = {
@@ -129,39 +127,23 @@ export const subTilesetJson = (c: Context<{ Bindings: Env }>) => {
 };
 
 /**
- * Inline subtree for a (LEAF_PARENT_Z, X, Y) cell: 4 z=MIN_Z children,
- * each carrying 4 z=MAX_Z grandchildren. The whole cluster gets emitted
- * in a single response so Cesium doesn't need yet another round trip
- * before it can start streaming glbs.
+ * Inline tile node at zoom `z` covering (x, y). Recurses through every
+ * content zoom from MIN_Z down to MAX_Z so a single LEAF_PARENT_Z tileset
+ * carries the whole content subtree it needs.
  */
-function leafChildren(parentX: number, parentY: number): Tile[] {
-  const minZ = MIN_Z;
-  const maxZ = MAX_Z;
-  const out: Tile[] = [];
-  for (let dx = 0; dx < 2; dx++) {
-    for (let dy = 0; dy < 2; dy++) {
-      const mx = 2 * parentX + dx;
-      const my = 2 * parentY + dy;
-      const grandchildren: Tile[] = [];
-      for (let ex = 0; ex < 2; ex++) {
-        for (let ey = 0; ey < 2; ey++) {
-          const lx = 2 * mx + ex;
-          const ly = 2 * my + ey;
-          grandchildren.push({
-            boundingVolume: { region: tileRegion(maxZ, lx, ly, HEIGHT_MIN_M, HEIGHT_MAX_M) },
-            geometricError: geometricErrorFor(maxZ),
-            content: { uri: `/${IMPL_VERSION}/${maxZ}/${lx}/${ly}.glb` },
-          });
-        }
-      }
-      out.push({
-        boundingVolume: { region: tileRegion(minZ, mx, my, HEIGHT_MIN_M, HEIGHT_MAX_M) },
-        geometricError: geometricErrorFor(minZ),
-        refine: refineFor(minZ),
-        content: { uri: `/${IMPL_VERSION}/${minZ}/${mx}/${my}.glb` },
-        children: grandchildren,
-      });
-    }
-  }
-  return out;
+function buildContentSubtree(z: number, x: number, y: number): Tile {
+  const tile: Tile = {
+    boundingVolume: { region: tileRegion(z, x, y, HEIGHT_MIN_M, HEIGHT_MAX_M) },
+    geometricError: geometricErrorFor(z),
+    content: { uri: `/${IMPL_VERSION}/${z}/${x}/${y}.glb` },
+  };
+  if (z >= MAX_Z) return tile; // leaf — no children
+  tile.refine = refineFor(z);
+  tile.children = [
+    [2 * x, 2 * y],
+    [2 * x + 1, 2 * y],
+    [2 * x, 2 * y + 1],
+    [2 * x + 1, 2 * y + 1],
+  ].map(([cx, cy]) => buildContentSubtree(z + 1, cx!, cy!));
+  return tile;
 }
