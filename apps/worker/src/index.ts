@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { cache } from "hono/cache";
 import type { Env } from "./env";
 import { glbTile } from "./routes/glb";
 import { subTilesetJson, tilesetJson } from "./routes/tileset";
@@ -16,14 +15,11 @@ app.get("/healthz", (c) => c.text("ok"));
 // `Cache-Control` with `must-revalidate` (see routes/tileset.ts).
 app.get("/tileset.json", tilesetJson);
 
-// Versioned navigation tilesets — immutable for a given IMPL_VERSION, so
-// edge cache can hold them aggressively. Hono's cache middleware keys by
-// URL, which is what we want.
-app.get(
-  "/:impl/sub/:z/:x/:y/tileset.json",
-  cache({ cacheName: "tileset-sub", cacheControl: "public, max-age=2592000, immutable" }),
-  subTilesetJson,
-);
+// Versioned navigation tilesets. We deliberately skip the Hono cache
+// middleware: the handler itself emits the right Cache-Control header
+// (immutable + URL versioning means browsers/CDNs cache effectively),
+// and CACHE_DISABLED in dev can flip those headers to `no-store`.
+app.get("/:impl/sub/:z/:x/:y/tileset.json", subTilesetJson);
 
 // Versioned glb URL. See src/routes/glb.ts for the content-addressable
 // dedup logic; the per-tile ETag covers per-MVT hashes and the LOD

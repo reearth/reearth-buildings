@@ -1,5 +1,5 @@
 import type { Context } from "hono";
-import type { Env } from "../env";
+import { type Env, cacheDisabled } from "../env";
 import {
   HEIGHT_MAX_M,
   HEIGHT_MIN_M,
@@ -58,14 +58,13 @@ const jsonResponse = (body: unknown, cacheControl: string, etag: string) =>
 
 /** Unversioned root tileset. */
 export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
+  const noCache = cacheDisabled(c.env);
   const etag = `"${IMPL_VERSION}-root"`;
-  if (c.req.header("if-none-match") === etag) {
+  const cc = noCache ? "no-store" : "public, max-age=60, must-revalidate";
+  if (!noCache && c.req.header("if-none-match") === etag) {
     return new Response(null, {
       status: 304,
-      headers: {
-        etag,
-        "cache-control": "public, max-age=60, must-revalidate",
-      },
+      headers: { etag, "cache-control": cc },
     });
   }
   const body = {
@@ -83,7 +82,7 @@ export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
   // them only a 304. When IMPL_VERSION moves the URL contents change,
   // the ETag changes, and clients pick up the new sub-tileset prefix
   // without needing a manual hard reload.
-  return jsonResponse(body, "public, max-age=60, must-revalidate", `"${IMPL_VERSION}-root"`);
+  return jsonResponse(body, cc, etag);
 };
 
 /** Versioned sub-tileset at (z, x, y). */
@@ -136,7 +135,7 @@ export const subTilesetJson = (c: Context<{ Bindings: Env }>) => {
   };
   return jsonResponse(
     body,
-    "public, max-age=2592000, immutable",
+    cacheDisabled(c.env) ? "no-store" : "public, max-age=2592000, immutable",
     `"${IMPL_VERSION}-sub-${z}-${x}-${y}"`,
   );
 };

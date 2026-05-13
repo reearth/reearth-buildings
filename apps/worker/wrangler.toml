@@ -13,6 +13,11 @@ workers_dev = true
 # HEAD probes. Pinning is handy for reproducible dev / staging sessions.
 PMTILES_VERSION = "20260513"
 
+# Dev convenience: turn off the R2 glb cache and emit `Cache-Control:
+# no-store` so iterating on the renderer never serves a stale glb.
+# Unset (or "0") in staging / prod where caching is the whole point.
+CACHE_DISABLED = "1"
+
 [[r2_buckets]]
 binding = "SOURCES"
 bucket_name = "reearth-buildings-sources-dev"

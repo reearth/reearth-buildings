@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import { geoidUndulation } from "../egm";
-import type { Env } from "../env";
+import { type Env, cacheDisabled } from "../env";
 import { sha1Hex } from "../hash";
 import { MAX_Z, MIN_Z, aabbOnlyAt, areaFilterFor, simplifyFor } from "../lod";
 import { fetchBuildingsMvt } from "../pmtiles";
@@ -72,25 +72,31 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
   }
   const hash = await hashSources(sourceTiles, z, x, y, filter, simplify, geoidOffsetM, aabbOnly);
   const etag = `"${hash}"`;
+  const noCache = cacheDisabled(c.env);
   const headers = {
     "content-type": "model/gltf-binary",
-    "cache-control": "public, max-age=300, must-revalidate",
+    "cache-control": noCache ? "no-store" : "public, max-age=300, must-revalidate",
     etag,
     "access-control-allow-origin": "*",
   } as const;
 
-  if (c.req.header("if-none-match") === etag) {
+  if (!noCache && c.req.header("if-none-match") === etag) {
     return new Response(null, { status: 304, headers });
   }
 
-  const r2Key = `cache/buildings/${IMPL_VERSION}/${hash}.glb`;
-  const cached = await c.env.CACHE.get(r2Key);
-  if (cached) {
-    return new Response(cached.body, { headers });
+  if (!noCache) {
+    const r2Key = `cache/buildings/${IMPL_VERSION}/${hash}.glb`;
+    const cached = await c.env.CACHE.get(r2Key);
+    if (cached) {
+      return new Response(cached.body, { headers });
+    }
+    const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, geoidOffsetM, aabbOnly);
+    c.executionCtx.waitUntil(c.env.CACHE.put(r2Key, glb));
+    return new Response(glb, { headers });
   }
 
+  // CACHE_DISABLED: always regenerate, never touch R2.
   const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, geoidOffsetM, aabbOnly);
-  c.executionCtx.waitUntil(c.env.CACHE.put(r2Key, glb));
   return new Response(glb, { headers });
 };
 
