@@ -8,15 +8,12 @@ workers_dev = true
 # package.json scripts chain them automatically).
 
 [vars]
-# PMTILES_VERSION pins the upstream Protomaps build date (YYYYMMDD). Leave
-# unset to let the worker auto-discover the latest build via KV-cached
-# HEAD probes. Pinning is handy for reproducible dev / staging sessions.
-PMTILES_VERSION = "20260513"
-
-# Dev convenience: turn off the R2 glb cache and emit `Cache-Control:
-# no-store` so iterating on the renderer never serves a stale glb.
-# Unset (or "0") in staging / prod where caching is the whole point.
-CACHE_DISABLED = "1"
+# CACHE_DISABLED bypasses the R2 glb cache and emits `Cache-Control:
+# no-store` on every response. Empty here (cache enabled); local dev
+# overrides via `.dev.vars` to flip it on. Declared at the top level so
+# `wrangler types` picks it up — staging / prod don't define it, so
+# their generated Env type doesn't carry it either.
+CACHE_DISABLED = ""
 
 [[r2_buckets]]
 binding = "SOURCES"

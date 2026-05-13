@@ -5,7 +5,8 @@
   "description": "Cloudflare Worker for buildings.reearth.land (TS host + Rust→WASM hot path)",
   "scripts": {
     "build:wasm": "wasm-pack build ../../crates/buildings-wasm --target web --out-dir ../../apps/worker/wasm --release",
-    "typecheck": "tsc --noEmit",
+    "types": "wrangler types --strict-vars false",
+    "typecheck": "pnpm run types && tsc --noEmit",
     "lint": "biome check src",
     "format": "biome format --write src",
     "dev": "pnpm run build:wasm && wrangler dev",
@@ -20,7 +21,6 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
-    "@cloudflare/workers-types": "^4.20251001.0",
     "meshoptimizer": "^1.1.1",
     "typescript": "^5.6.0",
     "wrangler": "^4.0.0"

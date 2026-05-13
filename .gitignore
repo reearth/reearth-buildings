@@ -16,7 +16,6 @@ Cargo.lock.bak
 .wrangler/
 .dev.vars
 .dev.vars.*
-!.dev.vars.example
 
 # build artifacts
 build/

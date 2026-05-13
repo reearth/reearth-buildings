@@ -4,7 +4,7 @@
     "module": "ES2022",
     "moduleResolution": "Bundler",
     "lib": ["ES2022"],
-    "types": ["@cloudflare/workers-types"],
+    "types": [],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
@@ -18,5 +18,5 @@
     "allowImportingTsExtensions": false,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "wasm/**/*.d.ts"]
+  "include": ["src/**/*.ts", "wasm/**/*.d.ts", "worker-configuration.d.ts"]
 }

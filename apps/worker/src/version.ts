@@ -33,11 +33,11 @@ const KV_LATEST_KEY = "pmtiles:latest";
 const KV_LATEST_TTL_SECONDS = 3600;
 
 /**
- * Resolve the upstream PMTiles date to fetch from. Honours `PMTILES_VERSION`
- * env (pin), otherwise auto-discovers via a KV-cached HEAD probe.
+ * Resolve the upstream PMTiles date to fetch from. Always auto-discovers
+ * via a KV-cached HEAD probe; for reproducible repros, pin the date by
+ * pre-populating the KV namespace under "pmtiles:latest".
  */
 export async function currentPmtilesDate(env: Env): Promise<string> {
-  if (env.PMTILES_VERSION) return env.PMTILES_VERSION;
   const cached = await env.PMTILES_DIR.get(KV_LATEST_KEY);
   if (cached) return cached;
   const fresh = await probeLatestDate();

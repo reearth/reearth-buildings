@@ -21,9 +21,6 @@ importers:
       '@biomejs/biome':
         specifier: ^1.9.0
         version: 1.9.4
-      '@cloudflare/workers-types':
-        specifier: ^4.20251001.0
-        version: 4.20260511.1
       meshoptimizer:
         specifier: ^1.1.1
         version: 1.1.1
@@ -663,7 +660,8 @@ snapshots:
   '@cloudflare/workerd-windows-64@1.20260508.1':
     optional: true
 
-  '@cloudflare/workers-types@4.20260511.1': {}
+  '@cloudflare/workers-types@4.20260511.1':
+    optional: true
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
