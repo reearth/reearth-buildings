@@ -7,7 +7,7 @@
 //   node scripts/fetch-and-render.mjs [z x y] [pmtiles-url]
 // Defaults to z=14 over Tokyo Station.
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FetchSource, PMTiles } from "pmtiles";
@@ -52,6 +52,8 @@ if (sources.length === 0) {
 }
 
 const wasmModule = await import(resolve(here, "../wasm/buildings_wasm.js"));
+const wasmBytes = readFileSync(resolve(here, "../wasm/buildings_wasm_bg.wasm"));
+await wasmModule.default({ module_or_path: wasmBytes });
 const { render_glb_lod } = wasmModule;
 
 const totalLen = sources.reduce((s, t) => s + t.mvt.length, 0);

@@ -4,7 +4,7 @@
   "private": true,
   "description": "Cloudflare Worker for buildings.reearth.land (TS host + Rust→WASM hot path)",
   "scripts": {
-    "build:wasm": "wasm-pack build ../../crates/buildings-wasm --target bundler --out-dir ../../apps/worker/wasm --release",
+    "build:wasm": "wasm-pack build ../../crates/buildings-wasm --target web --out-dir ../../apps/worker/wasm --release",
     "typecheck": "tsc --noEmit",
     "lint": "biome check src",
     "format": "biome format --write src",

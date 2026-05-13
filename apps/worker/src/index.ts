@@ -30,6 +30,9 @@ app.get(
 // Versioned glb URL. See src/routes/glb.ts for the content-addressable
 // dedup logic; the per-tile ETag covers per-MVT hashes and the LOD
 // filter / simplify parameters.
-app.get("/:impl/:z/:x/:y.glb", glbTile);
+// The trailing `.glb` is part of `:y` (Hono's RegExpRouter crashes on
+// regex-constrained params when mixed with our sub-tileset route); the
+// handler strips it before parsing.
+app.get("/:impl/:z/:x/:y", glbTile);
 
 export default app;

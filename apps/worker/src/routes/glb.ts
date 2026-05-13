@@ -23,9 +23,17 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     return c.text("unknown impl version — re-fetch /tileset.json", 410);
   }
 
+  // Route is `/:impl/:z/:x/:y` (no regex constraint to keep Hono happy
+  // alongside the sub-tileset pattern), so `y` arrives with the trailing
+  // ".glb" attached. Strip it here.
+  const yRaw = c.req.param("y") ?? "";
+  if (!yRaw.endsWith(".glb")) return c.text("not found", 404);
   const z = Number(c.req.param("z"));
   const x = Number(c.req.param("x"));
-  const y = Number(c.req.param("y"));
+  const y = Number(yRaw.slice(0, -4));
+  if (!Number.isFinite(z) || !Number.isFinite(x) || !Number.isFinite(y)) {
+    return c.text("bad tile coord", 400);
+  }
   if (z < MIN_Z || z > MAX_Z) {
     return c.text(`only z=${MIN_Z}..${MAX_Z} is served`, 404);
   }

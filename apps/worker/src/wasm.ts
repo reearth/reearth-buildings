@@ -1,4 +1,18 @@
-import { render_glb_lod } from "../wasm/buildings_wasm";
+// Wrangler imports `.wasm` files as a compiled `WebAssembly.Module`. We
+// pass that into wasm-bindgen's synchronous `initSync` once at module
+// load and then re-export the typed wrapper.
+//
+// Why not `wasm-pack --target bundler`? The bundler-target glue assumes
+// the bundler implements the "wasm import is treated as exports object"
+// convention. Esbuild (which wrangler uses) treats `.wasm` as a Module
+// instead, so the bundler glue ends up calling `wasm.__wbindgen_*` on a
+// plain Module and blowing up with TypeError. The web target gives us
+// explicit init and works the same way under Node.
+
+import { initSync, render_glb_lod } from "../wasm/buildings_wasm";
+import wasmModule from "../wasm/buildings_wasm_bg.wasm";
+
+initSync({ module: wasmModule });
 
 export interface SourceTile {
   mvt: Uint8Array;
