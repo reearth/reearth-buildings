@@ -100,12 +100,15 @@ fn extrude_ring(
             // back to ECEF.
             normals.extend_from_slice(&[0.0, 1.0, 0.0]);
         }
-        // earcutr returns indices in ring order. With +Y=up these need a
-        // winding flip to face upward (CCW seen from +Y).
+        // earcutr returns CCW indices in the input (east, north) plane.
+        // Mapping (e, n) → (x=e, y=top, z=-n) flips the visual winding
+        // when projected to (x, z), so triangles end up CCW as seen from
+        // +Y (above) with the original order — the geometric normal
+        // already points up. Keep the order.
         for tri in roof_tris.chunks_exact(3) {
             indices.push(base + tri[0] as u32);
-            indices.push(base + tri[2] as u32);
             indices.push(base + tri[1] as u32);
+            indices.push(base + tri[2] as u32);
         }
     }
 
