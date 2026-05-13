@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import type { Env } from "../env";
 import { sha1Hex } from "../hash";
-import { MAX_Z, MIN_Z, THRESHOLD_M2 } from "../lod";
+import { MAX_Z, MIN_Z, areaFilterFor, simplifyFor } from "../lod";
 import { fetchBuildingsMvt } from "../pmtiles";
 import { IMPL_VERSION, currentPmtilesDate } from "../version";
 import { type SourceTile, renderGlbWasm } from "../wasm";
@@ -43,10 +43,12 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     return c.text("tile out of source coverage", 404);
   }
 
-  // Hash inputs (deterministic across deploys for unchanged content).
-  const filter =
-    z === MAX_Z ? { minM2: 0, maxM2: THRESHOLD_M2 } : { minM2: THRESHOLD_M2, maxM2: 0 };
-  const hash = await hashSources(sourceTiles, z, x, y, filter);
+  // Filter / simplify derive from LOD_MODE so a mode flip changes the
+  // payload semantics. IMPL_VERSION (URL prefix) also encodes the mode,
+  // keeping the URL space cache-safe across flips.
+  const filter = areaFilterFor(z);
+  const simplify = simplifyFor(z);
+  const hash = await hashSources(sourceTiles, z, x, y, filter, simplify);
   const etag = `"${hash}"`;
   const headers = {
     "content-type": "model/gltf-binary",
@@ -65,7 +67,7 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     return new Response(cached.body, { headers });
   }
 
-  const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter);
+  const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify);
   c.executionCtx.waitUntil(c.env.CACHE.put(r2Key, glb));
   return new Response(glb, { headers });
 };
@@ -90,9 +92,10 @@ async function hashSources(
   outX: number,
   outY: number,
   filter: { minM2: number; maxM2: number },
+  simplify: { ratio: number; targetErrorM: number },
 ): Promise<string> {
   const header = new TextEncoder().encode(
-    `${outZ}/${outX}/${outY};f=${filter.minM2},${filter.maxM2};n=${sources.length};`,
+    `${outZ}/${outX}/${outY};f=${filter.minM2},${filter.maxM2};s=${simplify.ratio},${simplify.targetErrorM};n=${sources.length};`,
   );
   // Hash each MVT first (cheap on cache hit, ~1ms), then mix into a final
   // hash so input order matters but per-tile recomputation is avoided

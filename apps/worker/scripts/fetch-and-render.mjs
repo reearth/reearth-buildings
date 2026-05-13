@@ -72,8 +72,24 @@ for (let i = 0; i < sources.length; i++) {
 const filter = z === MAX_Z ? { min: 0, max: THRESHOLD_M2 } : { min: THRESHOLD_M2, max: 0 };
 console.log(`filter min=${filter.min} max=${filter.max} m²`);
 
+// Simplify off by default; pass --simplify <ratio> <errorM> to try it.
+const simplifyArgs = process.argv.slice(6);
+const simplifyRatio = simplifyArgs[0] ? Number(simplifyArgs[0]) : 1;
+const simplifyError = simplifyArgs[1] ? Number(simplifyArgs[1]) : 0;
+
 const t0 = performance.now();
-const glb = render_glb_lod(concat, lens, tiles, z, x, y, filter.min, filter.max);
+const glb = render_glb_lod(
+  concat,
+  lens,
+  tiles,
+  z,
+  x,
+  y,
+  filter.min,
+  filter.max,
+  simplifyRatio,
+  simplifyError,
+);
 const ms = (performance.now() - t0).toFixed(1);
 console.log(`glb bytes: ${glb.byteLength} (${ms} ms)`);
 

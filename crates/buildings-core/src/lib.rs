@@ -1,8 +1,4 @@
 //! End-to-end glb tile builder.
-//!
-//! Pipeline: one or more MVT buildings layers (gzipped or not) →
-//!   triangulated, extruded mesh in the output tile's ENU →
-//!   glb (glTF 2.0 binary) with a root-node ENU→ECEF matrix.
 
 use bytes::Bytes;
 
@@ -20,7 +16,6 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// One MVT input identified by the tile (z, x, y) it represents.
 pub struct MvtInput<'a> {
     pub z: u8,
     pub x: u32,
@@ -30,19 +25,18 @@ pub struct MvtInput<'a> {
 
 /// Render an output tile from one or more source MVT tiles.
 ///
-/// * `out_(z|x|y)`: the tile the glb is for. All geometry is anchored at
-///   this tile's centre.
-/// * `sources`: one or more MVT inputs. For a single-tile render they
-///   simply equal `out_(z, x, y)`; for an aggregated parent at z=13 they
-///   are typically the four z=14 children covering it.
-/// * `filter`: minimum / maximum building footprint area in m². Pass
-///   `AreaFilter::default()` to include all buildings.
+/// * `simplify_ratio`: 1.0 keeps every triangle; < 1.0 hands the mesh to
+///   `meshopt::simplify` to drop tris while staying within
+///   `simplify_target_error_m` metres of the original surface. Use this
+///   for parent (z=13) tiles where exact geometry isn't needed.
 pub fn render_glb_lod(
     out_z: u8,
     out_x: u32,
     out_y: u32,
     sources: &[MvtInput<'_>],
     filter: AreaFilter,
+    simplify_ratio: f32,
+    simplify_target_error_m: f32,
 ) -> Result<Bytes> {
     let decoded: Vec<(u8, u32, u32, mvt_decoder::DecodedTile)> = sources
         .iter()
@@ -57,7 +51,11 @@ pub fn render_glb_lod(
             tile: t,
         })
         .collect();
-    let mesh = mesh::build_mesh(out_z, out_x, out_y, &mesh_sources, filter);
+    let mut mesh = mesh::build_mesh(out_z, out_x, out_y, &mesh_sources, filter);
+
+    if simplify_ratio > 0.0 && simplify_ratio < 1.0 {
+        mesh::simplify_mesh(&mut mesh, simplify_ratio, simplify_target_error_m);
+    }
 
     let center = coord::tile_center(out_z, out_x, out_y);
     let m = coord::enu_to_ecef_matrix(center);
@@ -106,6 +104,8 @@ mod tests {
                 bytes: &[],
             }],
             AreaFilter::default(),
+            1.0,
+            0.0,
         )
         .unwrap();
         assert!(glb.len() > 20);

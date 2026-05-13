@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { Env } from "../env";
-import { MAX_Z, MIN_Z } from "../lod";
+import { MAX_Z, MIN_Z, refineFor } from "../lod";
 import { IMPL_VERSION } from "../version";
 
 // Two-level explicit tileset:
@@ -71,8 +71,9 @@ export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
   for (let px = px0; px <= px1; px++) {
     for (let py = pyTop; py <= pyBot; py++) {
       const parent = tileNode(MIN_Z, px, py, GE_PARENT);
-      // additively refine into z=MAX_Z children
-      parent.refine = "ADD";
+      // ADD: children stream in on top of parent.
+      // REPLACE: parent is hidden once any child is loaded.
+      parent.refine = refineFor(MIN_Z);
       const children: Tile[] = [];
       for (let dx = 0; dx < factor; dx++) {
         for (let dy = 0; dy < factor; dy++) {
@@ -99,6 +100,7 @@ export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
         ],
       },
       geometricError: GE_ROOT,
+      // Root is always ADD: multiple top-level parents must coexist.
       refine: "ADD",
       children: parents,
     },

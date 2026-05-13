@@ -1,4 +1,5 @@
 import type { Env } from "./env";
+import { LOD_MODE } from "./lod";
 
 /**
  * Bump when the renderer / glb schema changes. Lives in the URL prefix so
@@ -9,8 +10,13 @@ import type { Env } from "./env";
  * ETag and R2 cache key — unchanged tiles stay deduplicated across
  * pmtiles builds, so only tiles whose source content actually changed
  * get re-rendered.
+ *
+ * The LOD mode is appended too: switching ADD ↔ REPLACE changes the
+ * meaning of the geometry at every zoom, so a flip must invalidate the
+ * whole URL space.
  */
-export const IMPL_VERSION = "v1";
+const RENDERER_VERSION = "v1";
+export const IMPL_VERSION = `${RENDERER_VERSION}-${LOD_MODE}`;
 
 /**
  * Where Protomaps publishes daily planet builds. Each `${YYYYMMDD}.pmtiles`

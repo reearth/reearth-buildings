@@ -8,6 +8,51 @@ pub fn _start() {
     console_error_panic_hook::set_once();
 }
 
+// meshoptimizer's C++ allocator pulls in `operator new` / `operator delete`,
+// which on wasm32-unknown-unknown have no implementation and would show up
+// as `env._Znwm` / `env._ZdlPv` imports — which a bundler-target glb does
+// not provide. Backing them with Rust's global allocator keeps everything
+// self-contained. We stash the allocation size right before the user
+// pointer so the sizeless delete operator can recover a Layout.
+#[cfg(target_arch = "wasm32")]
+mod cxx_runtime {
+    use std::alloc::{alloc, dealloc, Layout};
+
+    const HEADER: usize = std::mem::size_of::<usize>();
+
+    fn layout(size: usize) -> Layout {
+        Layout::from_size_align(size + HEADER, std::mem::align_of::<usize>()).unwrap()
+    }
+
+    /// `operator new(size_t)`
+    #[no_mangle]
+    pub unsafe extern "C" fn _Znwm(size: usize) -> *mut u8 {
+        let p = alloc(layout(size));
+        if p.is_null() {
+            return p;
+        }
+        *(p as *mut usize) = size;
+        p.add(HEADER)
+    }
+
+    /// `operator delete(void*)`
+    #[no_mangle]
+    pub unsafe extern "C" fn _ZdlPv(ptr: *mut u8) {
+        if ptr.is_null() {
+            return;
+        }
+        let base = ptr.sub(HEADER);
+        let size = *(base as *mut usize);
+        dealloc(base, layout(size));
+    }
+
+    /// `operator delete(void*, size_t)` — sized form. C++14+ may emit this.
+    #[no_mangle]
+    pub unsafe extern "C" fn _ZdlPvm(ptr: *mut u8, _size: usize) {
+        _ZdlPv(ptr);
+    }
+}
+
 /// Render a glb for the output tile, aggregating geometry from any number
 /// of source MVT tiles and filtering by footprint area.
 ///
@@ -28,6 +73,8 @@ pub fn render_glb_lod(
     out_y: u32,
     min_area_m2: f32,
     max_area_m2: f32,
+    simplify_ratio: f32,
+    simplify_target_error_m: f32,
 ) -> std::result::Result<Vec<u8>, JsError> {
     if mvt_lens.len() * 3 != src_tiles.len() {
         return Err(JsError::new("mvt_lens / src_tiles length mismatch"));
@@ -53,7 +100,15 @@ pub fn render_glb_lod(
         min_m2: min_area_m2,
         max_m2: max_area_m2,
     };
-    let bytes = buildings_core::render_glb_lod(out_z, out_x, out_y, &inputs, filter)
-        .map_err(|e| JsError::new(&e.to_string()))?;
+    let bytes = buildings_core::render_glb_lod(
+        out_z,
+        out_x,
+        out_y,
+        &inputs,
+        filter,
+        simplify_ratio,
+        simplify_target_error_m,
+    )
+    .map_err(|e| JsError::new(&e.to_string()))?;
     Ok(bytes.into())
 }

@@ -14,10 +14,18 @@ export interface AreaFilter {
   maxM2: number;
 }
 
+export interface SimplifyOptions {
+  /** 1.0 keeps every triangle; lower drops them. */
+  ratio: number;
+  /** Max allowed geometric deviation in metres. Ignored when ratio = 1. */
+  targetErrorM: number;
+}
+
 export function renderGlbWasm(
   sources: SourceTile[],
   out: { z: number; x: number; y: number },
   filter: AreaFilter,
+  simplify: SimplifyOptions = { ratio: 1, targetErrorM: 0 },
 ): Uint8Array {
   const totalLen = sources.reduce((s, src) => s + src.mvt.length, 0);
   const concat = new Uint8Array(totalLen);
@@ -33,5 +41,16 @@ export function renderGlbWasm(
     tiles[i * 3 + 1] = s.x;
     tiles[i * 3 + 2] = s.y;
   }
-  return render_glb_lod(concat, lens, tiles, out.z, out.x, out.y, filter.minM2, filter.maxM2);
+  return render_glb_lod(
+    concat,
+    lens,
+    tiles,
+    out.z,
+    out.x,
+    out.y,
+    filter.minM2,
+    filter.maxM2,
+    simplify.ratio,
+    simplify.targetErrorM,
+  );
 }

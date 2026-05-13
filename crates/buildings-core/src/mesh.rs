@@ -6,6 +6,7 @@
 
 use crate::coord::{self, LonLat};
 use mvt_decoder::{BuildingFeature, DecodedTile};
+use std::collections::HashMap;
 
 /// Per-building metadata, indexed by FEATURE_ID written into the mesh.
 #[derive(Debug, Clone, Default)]
@@ -21,21 +22,13 @@ pub struct FeatureProps {
 }
 
 pub struct Mesh {
-    /// Flattened [x,y,z, x,y,z, ...] in metres (ENU; y=up).
     pub positions: Vec<f32>,
-    /// Per-vertex normal, parallel to `positions`.
     pub normals: Vec<f32>,
-    /// Per-vertex FEATURE_ID_0 (u16). Index into `features`.
     pub feature_ids: Vec<u16>,
-    /// Triangle indices into the position array.
     pub indices: Vec<u32>,
-    /// One entry per building feature.
     pub features: Vec<FeatureProps>,
 }
 
-/// A source MVT tile contributing geometry. For z=14 single-tile renders
-/// you pass one. For an aggregated parent (e.g. z=13) you pass the four
-/// z=14 children whose union covers the parent.
 pub struct Source<'a> {
     pub z: u8,
     pub x: u32,
@@ -43,8 +36,6 @@ pub struct Source<'a> {
     pub tile: &'a DecodedTile,
 }
 
-/// Inclusive [`min_area_m2`, `max_area_m2`) filter. Either bound set to
-/// `0.0` disables that end of the range.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AreaFilter {
     pub min_m2: f32,
@@ -71,6 +62,20 @@ pub fn default_height_meters(feat: &BuildingFeature) -> f64 {
     }
 }
 
+/// One clipped polygon belonging to some (possibly multi-fragment) building.
+struct Fragment {
+    /// Index into the parent `sources` slice. Lets us look up
+    /// (src_z, src_x, src_y, extent) later without copying them around.
+    source_idx: usize,
+    polygon: Polygon,
+}
+
+struct PendingFeature {
+    props: FeatureProps,
+    total_area_m2: f32,
+    fragments: Vec<Fragment>,
+}
+
 pub fn build_mesh(
     out_z: u8,
     out_x: u32,
@@ -80,61 +85,86 @@ pub fn build_mesh(
 ) -> Mesh {
     let anchor = coord::tile_center(out_z, out_x, out_y);
 
+    // ---- 1. collect all fragments, grouping by OSM id ----
+    let mut by_osm: HashMap<u64, usize> = HashMap::new();
+    let mut pending: Vec<PendingFeature> = Vec::new();
+
+    for (src_idx, source) in sources.iter().enumerate() {
+        for feat in &source.tile.buildings {
+            let polygons = group_polygons(&feat.rings);
+            if polygons.is_empty() {
+                continue;
+            }
+            for polygon in polygons {
+                let area = polygon_area_m2(&polygon, source, source.tile.extent) as f32;
+                let fragment = Fragment {
+                    source_idx: src_idx,
+                    polygon,
+                };
+                match feat.id {
+                    Some(osm_id) => match by_osm.get(&osm_id).copied() {
+                        Some(idx) => {
+                            pending[idx].fragments.push(fragment);
+                            pending[idx].total_area_m2 += area;
+                        }
+                        None => {
+                            by_osm.insert(osm_id, pending.len());
+                            pending.push(PendingFeature {
+                                props: feature_props(feat, area),
+                                total_area_m2: area,
+                                fragments: vec![fragment],
+                            });
+                        }
+                    },
+                    None => {
+                        // No stable id → can't dedup. Each unidentified
+                        // feature counts as its own building. Mostly a
+                        // theoretical case for OSM data.
+                        pending.push(PendingFeature {
+                            props: feature_props(feat, area),
+                            total_area_m2: area,
+                            fragments: vec![fragment],
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- 2. emit features that pass the filter ----
     let mut positions: Vec<f32> = Vec::new();
     let mut normals: Vec<f32> = Vec::new();
     let mut feature_ids: Vec<u16> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     let mut features: Vec<FeatureProps> = Vec::new();
 
-    for source in sources {
-        for feat in &source.tile.buildings {
-            let polygons = group_polygons(&feat.rings);
-            if polygons.is_empty() {
-                continue;
-            }
-            let area = polygons
-                .iter()
-                .map(|p| polygon_area_m2(p, source, source.tile.extent))
-                .sum::<f64>() as f32;
-            if !filter.accepts(area) {
-                continue;
-            }
+    for mut building in pending {
+        if !filter.accepts(building.total_area_m2) {
+            continue;
+        }
+        building.props.footprint_m2 = building.total_area_m2;
+        let height = building.props.height_m as f64;
+        let min_h = building.props.min_height_m as f64;
+        let fid = features.len().min(u16::MAX as usize - 1) as u16;
+        features.push(building.props);
 
-            let height = default_height_meters(feat);
-            let min_h = feat.min_height.unwrap_or(0.0);
-            let fid = features.len().min(u16::MAX as usize - 1) as u16;
-            features.push(FeatureProps {
-                osm_id: feat.id.map(|v| v as i64),
-                name: feat.name.clone(),
-                kind: feat.kind.clone(),
-                building: feat.building.clone(),
-                height_m: height as f32,
-                min_height_m: min_h as f32,
-                levels: feat
-                    .levels
-                    .unwrap_or(0.0)
-                    .round()
-                    .clamp(0.0, u16::MAX as f64) as u16,
-                footprint_m2: area,
-            });
-
-            for polygon in &polygons {
-                extrude_polygon(
-                    source.z,
-                    source.x,
-                    source.y,
-                    source.tile.extent,
-                    polygon,
-                    anchor,
-                    min_h,
-                    height,
-                    fid,
-                    &mut positions,
-                    &mut normals,
-                    &mut feature_ids,
-                    &mut indices,
-                );
-            }
+        for fragment in building.fragments {
+            let source = &sources[fragment.source_idx];
+            extrude_polygon(
+                source.z,
+                source.x,
+                source.y,
+                source.tile.extent,
+                &fragment.polygon,
+                anchor,
+                min_h,
+                height,
+                fid,
+                &mut positions,
+                &mut normals,
+                &mut feature_ids,
+                &mut indices,
+            );
         }
     }
     Mesh {
@@ -146,16 +176,32 @@ pub fn build_mesh(
     }
 }
 
+fn feature_props(feat: &BuildingFeature, area_m2: f32) -> FeatureProps {
+    FeatureProps {
+        osm_id: feat.id.map(|v| v as i64),
+        name: feat.name.clone(),
+        kind: feat.kind.clone(),
+        building: feat.building.clone(),
+        height_m: default_height_meters(feat) as f32,
+        min_height_m: feat.min_height.unwrap_or(0.0) as f32,
+        levels: feat
+            .levels
+            .unwrap_or(0.0)
+            .round()
+            .clamp(0.0, u16::MAX as f64) as u16,
+        footprint_m2: area_m2,
+    }
+}
+
 /// One outer ring with zero or more holes. All vertex coords are in tile
-/// units; the closing duplicate vertex (when present) has been stripped.
+/// units (with the closing duplicate vertex stripped).
 struct Polygon {
     outer: Vec<[i32; 2]>,
     holes: Vec<Vec<[i32; 2]>>,
 }
 
-/// Group MVT rings into polygons using the signed-area sign convention
-/// (spec §4.3.4.4): A > 0 in tile coords starts a new outer ring; A < 0
-/// is a hole attached to the most recent outer.
+/// Group MVT rings into polygons (spec §4.3.4.4): tile-space A > 0 starts
+/// a new outer; A < 0 is a hole attached to the most recent outer.
 fn group_polygons(rings: &[Vec<[i32; 2]>]) -> Vec<Polygon> {
     let mut out: Vec<Polygon> = Vec::new();
     for raw in rings {
@@ -197,8 +243,6 @@ fn signed_area_tile(ring: &[[i32; 2]]) -> f64 {
     0.5 * a
 }
 
-/// Footprint area in m². Computes in the source tile's own ENU frame
-/// (anchor-independent), subtracting hole areas.
 fn polygon_area_m2(polygon: &Polygon, source: &Source<'_>, extent: u32) -> f64 {
     let src_center = coord::tile_center(source.z, source.x, source.y);
     let outer_area = ring_area_m2(&polygon.outer, source, extent, src_center).abs();
@@ -225,6 +269,24 @@ fn ring_area_m2(ring: &[[i32; 2]], source: &Source<'_>, extent: u32, anchor: Lon
         a += p[0] * q[1] - q[0] * p[1];
     }
     0.5 * a
+}
+
+/// True for each edge `(ring[i], ring[i+1])` that lies on the source
+/// tile's clip boundary. Walls on such edges are suppressed so that the
+/// fragments of a tile-straddling building don't draw redundant internal
+/// walls where they meet.
+fn boundary_edges(ring: &[[i32; 2]], extent: i32) -> Vec<bool> {
+    let n = ring.len();
+    let mut out = vec![false; n];
+    for i in 0..n {
+        let a = ring[i];
+        let b = ring[(i + 1) % n];
+        out[i] = (a[0] == 0 && b[0] == 0)
+            || (a[0] == extent && b[0] == extent)
+            || (a[1] == 0 && b[1] == 0)
+            || (a[1] == extent && b[1] == extent);
+    }
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -257,7 +319,9 @@ fn extrude_polygon(
                 .collect()
         })
         .collect();
+    let outer_boundary_skips = boundary_edges(&polygon.outer, extent as i32);
 
+    // ----- roof -----
     let mut flat: Vec<f64> = Vec::new();
     for p in &outer_enu {
         flat.push(p[0]);
@@ -297,8 +361,10 @@ fn extrude_polygon(
         }
     }
 
+    // ----- outer walls (skip tile-boundary edges) -----
     extrude_ring_walls(
         &outer_enu,
+        Some(&outer_boundary_skips),
         base_height,
         top_height,
         fid,
@@ -310,6 +376,7 @@ fn extrude_polygon(
     for h in &hole_enus {
         extrude_ring_walls(
             h,
+            None,
             base_height,
             top_height,
             fid,
@@ -324,6 +391,7 @@ fn extrude_polygon(
 #[allow(clippy::too_many_arguments)]
 fn extrude_ring_walls(
     enu: &[[f64; 2]],
+    skip_edges: Option<&[bool]>,
     base_height: f64,
     top_height: f64,
     fid: u16,
@@ -335,21 +403,35 @@ fn extrude_ring_walls(
     if enu.len() < 3 {
         return;
     }
+    // Walls assume CW traversal in (east, north). Reverse CCW input (holes
+    // arrive that way) so the outward face points away from the building
+    // solid in both cases.
     let mut a_enu = 0.0;
     for i in 0..enu.len() {
         let p = enu[i];
         let q = enu[(i + 1) % enu.len()];
         a_enu += p[0] * q[1] - q[0] * p[1];
     }
-    let ring: Vec<[f64; 2]> = if a_enu > 0.0 {
-        enu.iter().rev().copied().collect()
-    } else {
-        enu.to_vec()
-    };
-    let enu = &ring[..];
-    for i in 0..enu.len() {
-        let a = enu[i];
-        let b = enu[(i + 1) % enu.len()];
+    let reverse = a_enu > 0.0;
+    let n = enu.len();
+    for i in 0..n {
+        // skip_edges is parallel to the original (un-reversed) ring. When
+        // we traverse in reverse, the edge that was index `i` originally
+        // is the one starting at index `n - 1 - i` in the new walk.
+        if let Some(skips) = skip_edges {
+            let original_idx = if reverse { (n - 1 - i) % n } else { i };
+            if skips[original_idx] {
+                continue;
+            }
+        }
+        let ai = if reverse { n - 1 - i } else { i };
+        let bi = if reverse {
+            (n + n - 2 - i) % n
+        } else {
+            (i + 1) % n
+        };
+        let a = enu[ai];
+        let b = enu[bi];
         let dx = b[0] - a[0];
         let dz_n = b[1] - a[1];
         let len = (dx * dx + dz_n * dz_n).sqrt().max(1e-9);
@@ -362,12 +444,54 @@ fn extrude_ring_walls(
             [b[0] as f32, top_height as f32, -b[1] as f32],
             [a[0] as f32, top_height as f32, -a[1] as f32],
         ];
-        let n = [nx as f32, 0.0, -nz as f32];
+        let n_vec = [nx as f32, 0.0, -nz as f32];
         for v in &verts {
             positions.extend_from_slice(v);
-            normals.extend_from_slice(&n);
+            normals.extend_from_slice(&n_vec);
             feature_ids.push(fid);
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
+}
+
+/// In-place mesh decimation via meshopt. `ratio` is the fraction of
+/// triangles to keep (e.g. 0.5 = halve). `target_error_m` is the maximum
+/// geometric deviation in metres meshopt is allowed to introduce.
+///
+/// Note: with `refine: ADD` in the tileset, simplified parent geometry
+/// stays visible at close zoom underneath the additive children, so
+/// using this for the parent permanently sacrifices silhouette
+/// quality on those buildings. We expose it as a toggle and default
+/// it off; a future `refine: REPLACE` LOD chain could turn it on
+/// without that side effect.
+///
+/// Vertex / normal / feature_id arrays are kept as-is. After simplify
+/// some vertices become unreferenced; the meshopt vertex encoder
+/// downstream deals with the slack, which is minor at z=13.
+pub fn simplify_mesh(mesh: &mut Mesh, ratio: f32, target_error_m: f32) {
+    if ratio >= 1.0 || mesh.indices.len() < 6 {
+        return;
+    }
+    let target = ((mesh.indices.len() as f32 * ratio) as usize).max(3) / 3 * 3;
+    // meshopt::simplify wants positions as raw bytes via VertexDataAdapter.
+    let pos_bytes: &[u8] = bytemuck_slice(&mesh.positions);
+    let adapter = match meshopt::VertexDataAdapter::new(pos_bytes, 12, 0) {
+        Ok(a) => a,
+        Err(_) => return,
+    };
+    // simplify_sloppy ignores topology and can collapse across the many
+    // small disconnected buildings in our mesh, which the strict
+    // (topology-preserving) variant can't make headway on. We accept the
+    // looser shape because z=13 is a distance LOD anyway.
+    let new_indices =
+        meshopt::simplify_sloppy(&mesh.indices, &adapter, target, target_error_m, None);
+    if !new_indices.is_empty() {
+        mesh.indices = new_indices;
+    }
+}
+
+fn bytemuck_slice(v: &[f32]) -> &[u8] {
+    // Safe: f32 has no padding; the resulting slice is reinterpreted bytes
+    // with the same lifetime.
+    unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v)) }
 }
