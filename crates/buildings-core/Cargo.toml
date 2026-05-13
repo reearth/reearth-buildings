@@ -12,5 +12,6 @@ bytes = { workspace = true }
 thiserror = { workspace = true }
 earcutr = { workspace = true }
 byteorder = { workspace = true }
+meshopt = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

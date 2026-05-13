@@ -1,0 +1,9 @@
+# macOS / non-default toolchain only. Copy this file to .cargo/config.toml.
+#
+# meshopt-rs bundles C++ source. Apple's system clang cannot target
+# wasm32-unknown-unknown, so cc-rs must point at a clang build that can
+# (Homebrew LLVM, in this example). CI uses ubuntu-latest's bundled clang
+# which supports wasm targets natively, so this override is not needed there.
+[env]
+CC_wasm32-unknown-unknown = { value = "/opt/homebrew/opt/llvm/bin/clang", force = false }
+CXX_wasm32-unknown-unknown = { value = "/opt/homebrew/opt/llvm/bin/clang++", force = false }

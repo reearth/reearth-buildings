@@ -32,3 +32,6 @@ pkg/
 # env
 .env
 .env.local
+
+# per-developer cargo config (often contains local toolchain paths)
+.cargo/config.toml

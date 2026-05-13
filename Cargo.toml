@@ -23,6 +23,7 @@ console_error_panic_hook = "0.1"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 earcutr = "0.4"
 byteorder = "1"
+meshopt = "0.5"
 
 [profile.release]
 opt-level = "z"
