@@ -4,8 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Mapbox Vector Tile decoder for buildings layer"
+description = "Minimal Mapbox Vector Tile decoder for the buildings layer"
 
 [dependencies]
 bytes = { workspace = true }
 thiserror = { workspace = true }
+flate2 = { workspace = true }

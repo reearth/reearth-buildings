@@ -19,5 +19,5 @@ pub fn _start() {
 pub fn render_glb(mvt: &[u8], z: u8, x: u32, y: u32) -> std::result::Result<Vec<u8>, JsError> {
     let coord = buildings_core::TileCoord { z, x, y };
     let bytes = buildings_core::render_glb(coord, mvt).map_err(|e| JsError::new(&e.to_string()))?;
-    Ok(bytes.to_vec())
+    Ok(bytes.into())
 }

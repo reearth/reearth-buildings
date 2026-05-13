@@ -10,3 +10,7 @@ description = "Building polygon extrusion → glTF/glb (3D Tiles 1.1) generator"
 mvt-decoder = { path = "../mvt-decoder" }
 bytes = { workspace = true }
 thiserror = { workspace = true }
+earcutr = { workspace = true }
+byteorder = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
