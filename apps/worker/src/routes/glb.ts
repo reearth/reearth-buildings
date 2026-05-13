@@ -1,8 +1,10 @@
 import type { Context } from "hono";
+import { geoidUndulation } from "../egm";
 import type { Env } from "../env";
 import { sha1Hex } from "../hash";
 import { MAX_Z, MIN_Z, areaFilterFor, simplifyFor } from "../lod";
 import { fetchBuildingsMvt } from "../pmtiles";
+import { tileCenter } from "../tile";
 import { IMPL_VERSION, currentPmtilesDate } from "../version";
 import { type SourceTile, renderGlbWasm } from "../wasm";
 
@@ -56,7 +58,18 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
   // keeping the URL space cache-safe across flips.
   const filter = areaFilterFor(z);
   const simplify = simplifyFor(z);
-  const hash = await hashSources(sourceTiles, z, x, y, filter, simplify);
+  // EGM2008 undulation at the output tile centre; anchors building bases
+  // on the geoid so the tileset slots into Cesium terrain at the right
+  // altitude. Fail soft to 0 m when the geoid COG isn't provisioned —
+  // produces ellipsoid-anchored output, the previous behaviour.
+  let geoidOffsetM = 0;
+  const center = tileCenter(z, x, y);
+  try {
+    geoidOffsetM = await geoidUndulation(c.env, center.lonDeg, center.latDeg);
+  } catch {
+    geoidOffsetM = 0;
+  }
+  const hash = await hashSources(sourceTiles, z, x, y, filter, simplify, geoidOffsetM);
   const etag = `"${hash}"`;
   const headers = {
     "content-type": "model/gltf-binary",
@@ -75,7 +88,7 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     return new Response(cached.body, { headers });
   }
 
-  const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify);
+  const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, geoidOffsetM);
   c.executionCtx.waitUntil(c.env.CACHE.put(r2Key, glb));
   return new Response(glb, { headers });
 };
@@ -101,9 +114,10 @@ async function hashSources(
   outY: number,
   filter: { minM2: number; maxM2: number },
   simplify: { ratio: number; targetErrorM: number },
+  geoidOffsetM: number,
 ): Promise<string> {
   const header = new TextEncoder().encode(
-    `${outZ}/${outX}/${outY};f=${filter.minM2},${filter.maxM2};s=${simplify.ratio},${simplify.targetErrorM};n=${sources.length};`,
+    `${outZ}/${outX}/${outY};f=${filter.minM2},${filter.maxM2};s=${simplify.ratio},${simplify.targetErrorM};g=${geoidOffsetM.toFixed(2)};n=${sources.length};`,
   );
   // Hash each MVT first (cheap on cache hit, ~1ms), then mix into a final
   // hash so input order matters but per-tile recomputation is avoided

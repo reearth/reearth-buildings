@@ -63,8 +63,17 @@ pub fn wgs84_to_ecef(p: LonLat, height: f64) -> [f64; 3] {
 }
 
 /// Column-major 4x4 ENU→ECEF affine anchored at `origin`. glTF's
-/// `node.matrix` is column-major.
+/// `node.matrix` is column-major. Origin sits on the WGS84 ellipsoid
+/// (h = 0); use [`enu_to_ecef_matrix_at_height`] to lift it to the
+/// geoid (sea level) or another reference surface.
 pub fn enu_to_ecef_matrix(origin: LonLat) -> [f64; 16] {
+    enu_to_ecef_matrix_at_height(origin, 0.0)
+}
+
+/// Same as [`enu_to_ecef_matrix`] but anchors the origin at ellipsoidal
+/// height `height_m`. Pass `N` (geoid undulation, EGM2008) to make the
+/// ENU frame sit on mean sea level rather than the bare ellipsoid.
+pub fn enu_to_ecef_matrix_at_height(origin: LonLat, height_m: f64) -> [f64; 16] {
     let lon = origin.lon_deg.to_radians();
     let lat = origin.lat_deg.to_radians();
     let sin_lon = lon.sin();
@@ -80,7 +89,7 @@ pub fn enu_to_ecef_matrix(origin: LonLat) -> [f64; 16] {
     let ux = cos_lat * cos_lon;
     let uy = cos_lat * sin_lon;
     let uz = sin_lat;
-    let t = wgs84_to_ecef(origin, 0.0);
+    let t = wgs84_to_ecef(origin, height_m);
     [
         ex, ey, ez, 0.0, nx, ny, nz, 0.0, ux, uy, uz, 0.0, t[0], t[1], t[2], 1.0,
     ]

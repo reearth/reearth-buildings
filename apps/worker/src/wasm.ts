@@ -40,6 +40,7 @@ export function renderGlbWasm(
   out: { z: number; x: number; y: number },
   filter: AreaFilter,
   simplify: SimplifyOptions = { ratio: 1, targetErrorM: 0 },
+  geoidOffsetM = 0,
 ): Uint8Array {
   const totalLen = sources.reduce((s, src) => s + src.mvt.length, 0);
   const concat = new Uint8Array(totalLen);
@@ -66,5 +67,6 @@ export function renderGlbWasm(
     filter.maxM2,
     simplify.ratio,
     simplify.targetErrorM,
+    geoidOffsetM,
   );
 }

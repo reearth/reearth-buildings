@@ -29,6 +29,7 @@ pub struct MvtInput<'a> {
 ///   `meshopt::simplify` to drop tris while staying within
 ///   `simplify_target_error_m` metres of the original surface. Use this
 ///   for parent (z=13) tiles where exact geometry isn't needed.
+#[allow(clippy::too_many_arguments)]
 pub fn render_glb_lod(
     out_z: u8,
     out_x: u32,
@@ -37,6 +38,10 @@ pub fn render_glb_lod(
     filter: AreaFilter,
     simplify_ratio: f32,
     simplify_target_error_m: f32,
+    // EGM2008 undulation in metres at the output tile centre. Anchors
+    // every building's base on the geoid (mean sea level) so glbs sit
+    // at the right altitude relative to Cesium terrain.
+    geoid_offset_m: f32,
 ) -> Result<Bytes> {
     let decoded: Vec<(u8, u32, u32, mvt_decoder::DecodedTile)> = sources
         .iter()
@@ -58,7 +63,7 @@ pub fn render_glb_lod(
     }
 
     let center = coord::tile_center(out_z, out_x, out_y);
-    let m = coord::enu_to_ecef_matrix(center);
+    let m = coord::enu_to_ecef_matrix_at_height(center, geoid_offset_m as f64);
     // Two compositions: first re-shuffle the basis columns so the matrix
     // accepts our Y-up local vertices (vx=east, vy=up, vz=-north), then
     // apply Z_UP_TO_Y_UP to the matrix output so Cesium's automatic
@@ -128,6 +133,7 @@ mod tests {
             }],
             AreaFilter::default(),
             1.0,
+            0.0,
             0.0,
         )
         .unwrap();

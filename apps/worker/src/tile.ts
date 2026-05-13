@@ -16,6 +16,14 @@ export const yToLat = (y: number, z: number) => {
   return (180 / Math.PI) * Math.atan((Math.exp(n) - Math.exp(-n)) / 2);
 };
 
+/** Geographic centre of tile (z, x, y). */
+export function tileCenter(z: number, x: number, y: number): { lonDeg: number; latDeg: number } {
+  return {
+    lonDeg: (xToLon(x, z) + xToLon(x + 1, z)) / 2,
+    latDeg: (yToLat(y, z) + yToLat(y + 1, z)) / 2,
+  };
+}
+
 /** Bounding region for tile (z, x, y) as [west, south, east, north, min_h, max_h] radians. */
 export function tileRegion(z: number, x: number, y: number, minH: number, maxH: number): number[] {
   return [
