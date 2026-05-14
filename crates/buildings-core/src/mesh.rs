@@ -315,23 +315,12 @@ fn ring_area_m2(ring: &[[i32; 2]], source: &Source<'_>, extent: u32, anchor: Lon
     0.5 * a
 }
 
-/// True for each edge `(ring[i], ring[i+1])` that lies on the source
-/// tile's clip boundary. Walls on such edges are suppressed so that the
-/// fragments of a tile-straddling building don't draw redundant internal
-/// walls where they meet.
-fn boundary_edges(ring: &[[i32; 2]], extent: i32) -> Vec<bool> {
-    let n = ring.len();
-    let mut out = vec![false; n];
-    for i in 0..n {
-        let a = ring[i];
-        let b = ring[(i + 1) % n];
-        out[i] = (a[0] == 0 && b[0] == 0)
-            || (a[0] == extent && b[0] == extent)
-            || (a[1] == 0 && b[1] == 0)
-            || (a[1] == extent && b[1] == extent);
-    }
-    out
-}
+// (Boundary-wall skip removed: while it avoided drawing the internal
+// seam between two fragments of a tile-straddling building, it also
+// killed the actual exterior wall whenever a building's AABB happened
+// to align with the tile boundary — producing flat slabs without
+// visible walls. Doubled internal seams are mostly invisible from
+// outside the building, so the trade-off favours keeping walls.)
 
 #[allow(clippy::too_many_arguments)]
 fn extrude_polygon(
@@ -363,8 +352,6 @@ fn extrude_polygon(
                 .collect()
         })
         .collect();
-    let outer_boundary_skips = boundary_edges(&polygon.outer, extent as i32);
-
     // ----- roof -----
     let mut flat: Vec<f64> = Vec::new();
     for p in &outer_enu {
@@ -405,10 +392,10 @@ fn extrude_polygon(
         }
     }
 
-    // ----- outer walls (skip tile-boundary edges) -----
+    // ----- outer walls -----
     extrude_ring_walls(
         &outer_enu,
-        Some(&outer_boundary_skips),
+        None,
         base_height,
         top_height,
         fid,

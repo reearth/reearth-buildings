@@ -24,11 +24,6 @@ const HTML = `<!DOCTYPE html>
     font: 12px/1.45 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
     box-shadow: 0 4px 20px rgba(0,0,0,0.3);
   }
-  #panel { top: 12px; right: 12px; max-width: 320px; display: none; }
-  #panel h2 { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: #9fd1ff; }
-  #panel dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; }
-  #panel dt { color: #8b95a4; }
-  #panel dd { margin: 0; word-break: break-all; }
   #status { bottom: 12px; left: 12px; max-width: 360px; }
   #status .row { margin-top: 2px; color: #cfd6e0; }
   #status .err { color: #ff8e8e; }
@@ -42,11 +37,11 @@ const HTML = `<!DOCTYPE html>
   #toggle button.active { background: #3a82e0; border-color: #3a82e0; }
   #toggle button[disabled] { opacity: 0.5; cursor: not-allowed; }
   #toggle .note { color: #8b95a4; font-size: 11px; }
+  #toggle .sep { color: #404652; }
 </style>
 </head>
 <body>
 <div id="app"></div>
-<div id="panel" class="overlay"><h2 id="panel-title">Building</h2><dl id="panel-body"></dl></div>
 <div id="status" class="overlay">
   <div><span class="pill" id="loaded">0</span>tiles loaded</div>
   <div><span class="pill" id="failed">0</span>tiles failed</div>
@@ -55,6 +50,8 @@ const HTML = `<!DOCTYPE html>
 <div id="toggle" class="overlay">
   <button id="btn-ours" class="active" type="button">ours</button>
   <button id="btn-cesium" type="button">Cesium OSM</button>
+  <span class="sep">|</span>
+  <button id="btn-terrain" type="button">terrain</button>
   <span class="note" id="toggle-note"></span>
 </div>
 <script type="module">
@@ -189,29 +186,38 @@ const HTML = `<!DOCTYPE html>
     if (loaded) setActive("cesium");
   });
 
-  const panel = document.getElementById("panel");
-  const panelTitle = document.getElementById("panel-title");
-  const panelBody = document.getElementById("panel-body");
-  const handler = new Cesium.ScreenSpaceEventHandler(viewer.canvas);
-  handler.setInputAction((event) => {
-    const picked = viewer.scene.pick(event.position);
-    if (!(picked instanceof Cesium.Cesium3DTileFeature)) {
-      panel.style.display = "none";
-      return;
+  // ----- Terrain toggle (ellipsoid ↔ Cesium World Terrain) -----
+  // Useful for spotting whether a tileset anchors buildings on the
+  // geoid (Cesium OSM Buildings) or on the bare ellipsoid (vanilla
+  // 3D Tiles without the EGM offset).
+  const btnTerrain = document.getElementById("btn-terrain");
+  let terrainOn = false;
+  let cwt = null;
+  btnTerrain.addEventListener("click", async () => {
+    btnTerrain.disabled = true;
+    try {
+      if (!terrainOn) {
+        if (!cwt) cwt = await Cesium.createWorldTerrainAsync();
+        viewer.scene.setTerrain(new Cesium.Terrain(Promise.resolve(cwt)));
+        terrainOn = true;
+        btnTerrain.classList.add("active");
+      } else {
+        viewer.scene.setTerrain(new Cesium.Terrain(Promise.resolve(new Cesium.EllipsoidTerrainProvider())));
+        terrainOn = false;
+        btnTerrain.classList.remove("active");
+      }
+    } catch (err) {
+      console.error("terrain toggle failed", err);
+      toggleNote.textContent = "terrain load failed";
+    } finally {
+      btnTerrain.disabled = false;
     }
-    const ids = picked.getPropertyIds();
-    panelBody.innerHTML = "";
-    let title = "Building";
-    for (const id of ids) {
-      const v = picked.getProperty(id);
-      if (id === "name" && v) title = v;
-      const dt = document.createElement("dt"); dt.textContent = id;
-      const dd = document.createElement("dd"); dd.textContent = String(v);
-      panelBody.append(dt, dd);
-    }
-    panelTitle.textContent = title;
-    panel.style.display = "block";
-  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+  });
+
+  // Feature attributes show up in Cesium's built-in InfoBox; the
+  // EXT_structural_metadata path produces the same getProperty()
+  // surface as the older b3dm batch table, so the InfoBox renders
+  // them automatically for both ours and the Cesium OSM tileset.
 </script>
 </body>
 </html>
