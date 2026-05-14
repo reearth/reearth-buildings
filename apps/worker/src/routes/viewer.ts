@@ -15,7 +15,7 @@ const HTML = `<!DOCTYPE html>
 <meta charset="utf-8" />
 <title>Re:Earth Buildings — viewer</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.123/Build/Cesium/Widgets/widgets.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.141/Build/Cesium/Widgets/widgets.css" />
 <style>
   html, body, #app { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
   .overlay {
@@ -34,6 +34,14 @@ const HTML = `<!DOCTYPE html>
   #status .err { color: #ff8e8e; }
   #status .pill { display: inline-block; min-width: 30px; padding: 1px 6px; margin-right: 6px;
                   background: #2a2f3a; border-radius: 99px; text-align: center; }
+  #toggle { top: 12px; left: 12px; display: flex; gap: 6px; align-items: center; }
+  #toggle button {
+    background: #2a2f3a; color: #fff; border: 1px solid #404652;
+    padding: 5px 10px; border-radius: 6px; font: inherit; cursor: pointer;
+  }
+  #toggle button.active { background: #3a82e0; border-color: #3a82e0; }
+  #toggle button[disabled] { opacity: 0.5; cursor: not-allowed; }
+  #toggle .note { color: #8b95a4; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -44,10 +52,15 @@ const HTML = `<!DOCTYPE html>
   <div><span class="pill" id="failed">0</span>tiles failed</div>
   <div class="row" id="last-error"></div>
 </div>
+<div id="toggle" class="overlay">
+  <button id="btn-ours" class="active" type="button">ours</button>
+  <button id="btn-cesium" type="button">Cesium OSM</button>
+  <span class="note" id="toggle-note"></span>
+</div>
 <script type="module">
-  import * as Cesium from "https://cdn.jsdelivr.net/npm/cesium@1.123/Build/Cesium/index.js";
+  import * as Cesium from "https://cdn.jsdelivr.net/npm/cesium@1.141/Build/Cesium/index.js";
 
-  window.CESIUM_BASE_URL = "https://cdn.jsdelivr.net/npm/cesium@1.123/Build/Cesium/";
+  window.CESIUM_BASE_URL = "https://cdn.jsdelivr.net/npm/cesium@1.141/Build/Cesium/";
 
   const params = new URLSearchParams(location.search);
   const lon = Number(params.get("lon") ?? 139.7649);
@@ -57,6 +70,12 @@ const HTML = `<!DOCTYPE html>
   const pitch = Number(params.get("pitch") ?? -30);
   const debug = params.get("debug") === "1";
   const sse = Number(params.get("sse") ?? 16);
+  // Custom Cesium Ion token (for the OSM Buildings comparison toggle).
+  // The SDK ships with a default token suitable for dev evaluation but
+  // it has lower rate limits; supply your own via ?ion=... for stable
+  // testing.
+  const ionToken = params.get("ion");
+  if (ionToken) Cesium.Ion.defaultAccessToken = ionToken;
 
   const viewer = new Cesium.Viewer("app", {
     baseLayer: Cesium.ImageryLayer.fromProviderAsync(
@@ -120,6 +139,54 @@ const HTML = `<!DOCTYPE html>
     const msg = event.message ?? "(no message)";
     lastErrorEl.innerHTML = '<span class="err">' + url + '<br/>' + msg + '</span>';
     console.error("tile failed:", url, msg);
+  });
+
+  // ----- Cesium OSM Buildings comparison toggle -----
+  // Lazy: only fetch Cesium OSM Buildings on first click. Falls back to
+  // a "Cesium Ion needed" hint when the request 401s, so the dev page
+  // still works without a configured token.
+  const btnOurs = document.getElementById("btn-ours");
+  const btnCesium = document.getElementById("btn-cesium");
+  const toggleNote = document.getElementById("toggle-note");
+  let cesiumOsm = null;
+  let cesiumOsmLoading = null;
+
+  function setActive(which) {
+    btnOurs.classList.toggle("active", which === "ours");
+    btnCesium.classList.toggle("active", which === "cesium");
+    tileset.show = which === "ours";
+    if (cesiumOsm) cesiumOsm.show = which === "cesium";
+  }
+
+  async function ensureCesiumOsm() {
+    if (cesiumOsm) return cesiumOsm;
+    if (cesiumOsmLoading) return cesiumOsmLoading;
+    btnCesium.disabled = true;
+    toggleNote.textContent = "loading Cesium OSM Buildings…";
+    cesiumOsmLoading = Cesium.createOsmBuildingsAsync()
+      .then((t) => {
+        cesiumOsm = t;
+        cesiumOsm.show = false;
+        viewer.scene.primitives.add(cesiumOsm);
+        toggleNote.textContent = "";
+        return cesiumOsm;
+      })
+      .catch((err) => {
+        console.error("Cesium OSM Buildings load failed", err);
+        toggleNote.textContent = 'needs Ion token: ?ion=...';
+        return null;
+      })
+      .finally(() => {
+        btnCesium.disabled = false;
+        cesiumOsmLoading = null;
+      });
+    return cesiumOsmLoading;
+  }
+
+  btnOurs.addEventListener("click", () => setActive("ours"));
+  btnCesium.addEventListener("click", async () => {
+    const loaded = await ensureCesiumOsm();
+    if (loaded) setActive("cesium");
   });
 
   const panel = document.getElementById("panel");
