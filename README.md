@@ -20,13 +20,13 @@ Overture publishes an explicit `height` for the OSM-tagged minority of buildings
 2. **`num_floors`** — `num_floors × 3 m`
 3. **`class`** — lookup table on the Overture `class` enum (`apartments` → 25 m, `house` → 6 m, `industrial` → 10 m, …)
 4. **`subtype`** — coarser lookup on the 13-value `subtype` enum (`commercial` → 15 m, `residential` → 8 m, …)
-5. **`footprint`** — area heuristic for buildings with no class/subtype at all
+5. **`footprint`** / **`density`** — area heuristic for buildings with no class/subtype at all. In urban or denser neighbourhoods (classified by the source-tile building count) a minimum height kicks in: 9 m for "urban" (≈ 3 floors), 12 m for "dense urban" — so the small "pencil buildings" of central Tokyo don't render as huts. Method tag is `density` when this boost applied, `footprint` otherwise.
 
 The glb property table exposes three fields so styling code can tell the difference:
 
 - `height` — the value used for the extrusion (always populated)
 - `source_height` — the original Overture `height`, or `0` when absent
-- `height_method` — which of the five steps produced the height
+- `height_method` — `explicit | num_floors | class | subtype | footprint | density`
 
 ## Acknowledgments
 
