@@ -12,6 +12,22 @@ The [Overture Maps Foundation](https://overturemaps.org/) buildings PMTiles is r
 
 See [`cloudflare-architecture.md`](./cloudflare-architecture.md) for the full design.
 
+## Building height
+
+Overture publishes an explicit `height` for the OSM-tagged minority of buildings; the ML-derived footprints (Microsoft / Google open buildings) typically carry no height at all. Re:Earth Buildings resolves a usable height per building via a 5-step cascade:
+
+1. **`explicit`** — Overture `height` if present
+2. **`num_floors`** — `num_floors × 3 m`
+3. **`class`** — lookup table on the Overture `class` enum (`apartments` → 25 m, `house` → 6 m, `industrial` → 10 m, …)
+4. **`subtype`** — coarser lookup on the 13-value `subtype` enum (`commercial` → 15 m, `residential` → 8 m, …)
+5. **`footprint`** — area heuristic for buildings with no class/subtype at all
+
+The glb property table exposes three fields so styling code can tell the difference:
+
+- `height` — the value used for the extrusion (always populated)
+- `source_height` — the original Overture `height`, or `0` when absent
+- `height_method` — which of the five steps produced the height
+
 ## Acknowledgments
 
 This project would not exist without the work and ideas of others in the open geospatial community.

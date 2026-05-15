@@ -102,6 +102,12 @@ pub fn write_glb(mesh: &Mesh, enu_to_ecef: [f64; 16]) -> Vec<u8> {
         8,
     );
     let bv_height = push_bv(&mut bin, &mut buffer_views, f32_bytes(&cols.height), None);
+    let bv_source_height = push_bv(
+        &mut bin,
+        &mut buffer_views,
+        f32_bytes(&cols.source_height),
+        None,
+    );
     let bv_min_height = push_bv(
         &mut bin,
         &mut buffer_views,
@@ -131,6 +137,7 @@ pub fn write_glb(mesh: &Mesh, enu_to_ecef: [f64; 16]) -> Vec<u8> {
     let bv_subtype = push_string_column(&mut bin, &mut buffer_views, &cols.subtype);
     let bv_class = push_string_column(&mut bin, &mut buffer_views, &cols.class);
     let bv_roof_shape = push_string_column(&mut bin, &mut buffer_views, &cols.roof_shape);
+    let bv_height_method = push_string_column(&mut bin, &mut buffer_views, &cols.height_method);
 
     let feat_count = mesh.features.len();
     let bbox = aabb(&mesh.positions);
@@ -200,12 +207,14 @@ pub fn write_glb(mesh: &Mesh, enu_to_ecef: [f64; 16]) -> Vec<u8> {
                                 "name":        { "type": "STRING", "required": false, "noData": "" },
                                 "subtype":     { "type": "STRING", "required": false, "noData": "" },
                                 "class":       { "type": "STRING", "required": false, "noData": "" },
-                                "height":      { "type": "SCALAR", "componentType": "FLOAT32", "required": true },
-                                "min_height":  { "type": "SCALAR", "componentType": "FLOAT32", "required": true },
-                                "roof_height": { "type": "SCALAR", "componentType": "FLOAT32", "required": false, "noData": 0.0 },
-                                "ground_elev": { "type": "SCALAR", "componentType": "FLOAT32", "required": false, "noData": 0.0 },
-                                "num_floors":  { "type": "SCALAR", "componentType": "UINT16",  "required": false, "noData": 0 },
-                                "roof_shape":  { "type": "STRING", "required": false, "noData": "" }
+                                "height":        { "type": "SCALAR", "componentType": "FLOAT32", "required": true, "description": "Height in metres used for the extrusion. Resolved via height_method." },
+                                "source_height": { "type": "SCALAR", "componentType": "FLOAT32", "required": false, "noData": 0.0, "description": "Original Overture height value, if present." },
+                                "height_method": { "type": "STRING", "required": false, "noData": "", "description": "How `height` was chosen: explicit | num_floors | class | subtype | footprint." },
+                                "min_height":    { "type": "SCALAR", "componentType": "FLOAT32", "required": true },
+                                "roof_height":   { "type": "SCALAR", "componentType": "FLOAT32", "required": false, "noData": 0.0 },
+                                "ground_elev":   { "type": "SCALAR", "componentType": "FLOAT32", "required": false, "noData": 0.0 },
+                                "num_floors":    { "type": "SCALAR", "componentType": "UINT16",  "required": false, "noData": 0 },
+                                "roof_shape":    { "type": "STRING", "required": false, "noData": "" }
                             }
                         }
                     }
@@ -220,12 +229,14 @@ pub fn write_glb(mesh: &Mesh, enu_to_ecef: [f64; 16]) -> Vec<u8> {
                         "name":        { "values": bv_name.values, "stringOffsets": bv_name.string_offsets, "stringOffsetType": "UINT32" },
                         "subtype":     { "values": bv_subtype.values, "stringOffsets": bv_subtype.string_offsets, "stringOffsetType": "UINT32" },
                         "class":       { "values": bv_class.values, "stringOffsets": bv_class.string_offsets, "stringOffsetType": "UINT32" },
-                        "height":      { "values": bv_height },
-                        "min_height":  { "values": bv_min_height },
-                        "roof_height": { "values": bv_roof_height },
-                        "ground_elev": { "values": bv_ground_elev },
-                        "num_floors":  { "values": bv_num_floors },
-                        "roof_shape":  { "values": bv_roof_shape.values, "stringOffsets": bv_roof_shape.string_offsets, "stringOffsetType": "UINT32" }
+                        "height":        { "values": bv_height },
+                        "source_height": { "values": bv_source_height },
+                        "height_method": { "values": bv_height_method.values, "stringOffsets": bv_height_method.string_offsets, "stringOffsetType": "UINT32" },
+                        "min_height":    { "values": bv_min_height },
+                        "roof_height":   { "values": bv_roof_height },
+                        "ground_elev":   { "values": bv_ground_elev },
+                        "num_floors":    { "values": bv_num_floors },
+                        "roof_shape":    { "values": bv_roof_shape.values, "stringOffsets": bv_roof_shape.string_offsets, "stringOffsetType": "UINT32" }
                     }
                 }]
             }
@@ -377,6 +388,7 @@ fn round_up(n: usize, align: usize) -> usize {
 struct Columns {
     feature_id: Vec<u64>,
     height: Vec<f32>,
+    source_height: Vec<f32>,
     min_height: Vec<f32>,
     roof_height: Vec<f32>,
     ground_elev: Vec<f32>,
@@ -386,6 +398,7 @@ struct Columns {
     subtype: Vec<String>,
     class: Vec<String>,
     roof_shape: Vec<String>,
+    height_method: Vec<String>,
 }
 
 fn collect_columns(features: &[FeatureProps]) -> Columns {
@@ -393,6 +406,9 @@ fn collect_columns(features: &[FeatureProps]) -> Columns {
     for f in features {
         c.feature_id.push(f.feature_id.unwrap_or(0));
         c.height.push(f.height_m);
+        // 0 doubles as the schema's noData sentinel for "Overture had no
+        // height for this building".
+        c.source_height.push(f.source_height_m.unwrap_or(0.0));
         c.min_height.push(f.min_height_m);
         c.roof_height.push(f.roof_height_m);
         c.ground_elev.push(f.ground_elev_m);
@@ -402,6 +418,7 @@ fn collect_columns(features: &[FeatureProps]) -> Columns {
         c.subtype.push(f.subtype.clone().unwrap_or_default());
         c.class.push(f.class.clone().unwrap_or_default());
         c.roof_shape.push(f.roof_shape.clone().unwrap_or_default());
+        c.height_method.push(f.height_method.to_string());
     }
     c
 }

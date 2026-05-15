@@ -23,7 +23,15 @@ pub struct FeatureProps {
     pub name: Option<String>,
     pub subtype: Option<String>,
     pub class: Option<String>,
+    /// Resolved height used for the extrusion. Always positive.
     pub height_m: f32,
+    /// Original Overture `height` value, if present. `None` when the
+    /// upstream property was missing or 0; surfaces in glb as 0 with
+    /// `noData=0`.
+    pub source_height_m: Option<f32>,
+    /// Tag identifying which fallback path produced [`height_m`]. One of
+    /// `explicit` / `num_floors` / `class` / `subtype` / `footprint`.
+    pub height_method: &'static str,
     pub min_height_m: f32,
     pub roof_height_m: f32,
     pub roof_shape: Option<String>,
@@ -70,17 +78,109 @@ impl AreaFilter {
     }
 }
 
-/// Pick the building height in metres, falling back from explicit
-/// `height` → `num_floors × 3 m` → a constant. Overture's height
-/// coverage is partial outside well-mapped cities, so the fallback
-/// dominates many regions.
-pub fn default_height_meters(feat: &BuildingFeature) -> f64 {
-    match (feat.height, feat.num_floors) {
-        (Some(h), _) if h > 0.0 => h,
-        (_, Some(l)) if l > 0 => (l as f64) * 3.0,
-        // 12 m (≈ four floors) keeps the cityscape recognisable when
-        // height/floor tagging is missing.
-        _ => 12.0,
+/// Pick the building height in metres via a 5-step fallback cascade:
+///
+///   1. explicit Overture `height` (best — usually OSM-tagged)
+///   2. `num_floors × 3 m`
+///   3. class lookup (`apartments`, `house`, `industrial`, …)
+///   4. subtype lookup (coarser: `residential`, `commercial`, …)
+///   5. footprint area heuristic (last resort for ML-derived footprints
+///      with no metadata at all)
+///
+/// Returns `(height_m, method)` where `method` is a stable tag the glb
+/// surfaces as a property so downstream styling can distinguish
+/// "trust this" from "we guessed".
+pub fn default_height_meters(feat: &BuildingFeature, area_m2: f32) -> (f64, &'static str) {
+    if let Some(h) = feat.height {
+        if h > 0.0 {
+            return (h, "explicit");
+        }
+    }
+    if let Some(l) = feat.num_floors {
+        if l > 0 {
+            return ((l as f64) * 3.0, "num_floors");
+        }
+    }
+    if let Some(cls) = feat.class.as_deref() {
+        if let Some(h) = class_default_height(cls) {
+            return (h, "class");
+        }
+    }
+    if let Some(st) = feat.subtype.as_deref() {
+        if let Some(h) = subtype_default_height(st) {
+            return (h, "subtype");
+        }
+    }
+    (footprint_default_height(area_m2), "footprint")
+}
+
+/// Representative height by Overture `class` enum. Returns `None` for
+/// unrecognised classes so the caller can fall through to subtype /
+/// footprint heuristics. Values are deliberately conservative so we
+/// undershoot rather than tower over a neighbourhood.
+fn class_default_height(class: &str) -> Option<f64> {
+    Some(match class {
+        // Single-family residential
+        "house" | "detached" | "semidetached_house" | "terrace" | "bungalow"
+        | "static_caravan" | "houseboat" => 6.0,
+        // Multi-family / dense residential
+        "apartments" | "residential" | "dormitory" | "hotel" => 25.0,
+        // Office / commercial mid-to-high-rise
+        "office" | "commercial" => 30.0,
+        // Retail — typically low-rise even when large
+        "retail" | "supermarket" | "shop" | "kiosk" | "mall" => 6.0,
+        // Education / public institutions
+        "school" | "kindergarten" | "university" | "college" | "civic"
+        | "government" | "public" | "library" | "museum" | "theatre" => 12.0,
+        // Healthcare
+        "hospital" | "clinic" => 18.0,
+        // Industrial
+        "industrial" | "warehouse" | "factory" | "manufacture" => 10.0,
+        // Vehicle storage / utility
+        "garage" | "garages" | "carport" | "parking" => 4.0,
+        // Sheds / minor structures
+        "shed" | "hut" | "container" | "cabin" | "tent" | "service" => 3.0,
+        // Agricultural
+        "barn" | "farm" | "farm_auxiliary" | "cowshed" | "stable" | "sty"
+        | "greenhouse" | "silo" => 5.0,
+        // Religious — low footprint count but tall single-volume
+        "church" | "chapel" | "cathedral" | "mosque" | "temple" | "synagogue"
+        | "shrine" | "religious" | "monastery" => 12.0,
+        // Sport
+        "stadium" | "sports_hall" | "sports_centre" | "grandstand" => 15.0,
+        // Transport
+        "train_station" | "bus_station" | "terminal" | "transportation" => 12.0,
+        _ => return None,
+    })
+}
+
+/// Representative height by Overture `subtype` enum (the coarser, 13-value
+/// classification that's more often populated than `class`).
+fn subtype_default_height(subtype: &str) -> Option<f64> {
+    Some(match subtype {
+        "residential" => 8.0,
+        "commercial" => 15.0,
+        "industrial" => 10.0,
+        "agricultural" | "outbuilding" | "service" => 5.0,
+        "civic" | "education" | "entertainment" | "religious" => 12.0,
+        "medical" => 18.0,
+        "military" | "transportation" => 8.0,
+        _ => return None,
+    })
+}
+
+/// Final-resort height from footprint area. Tuned so that pure-ML
+/// footprints (Microsoft / Google open buildings) get a reasonable
+/// silhouette: tiny → outbuilding, small → house, large → warehouse.
+fn footprint_default_height(area_m2: f32) -> f64 {
+    if area_m2 < 60.0 {
+        4.0
+    } else if area_m2 < 200.0 {
+        6.0
+    } else if area_m2 < 800.0 {
+        9.0
+    } else {
+        10.0
     }
 }
 
@@ -246,13 +346,20 @@ pub fn build_mesh(
 }
 
 fn feature_props(feat: &BuildingFeature, area_m2: f32) -> FeatureProps {
+    let (height_m, height_method) = default_height_meters(feat, area_m2);
+    let source_height_m = feat
+        .height
+        .filter(|h| *h > 0.0)
+        .map(|h| h as f32);
     FeatureProps {
         feature_id: feat.id,
         gers_id: feat.gers_id.clone(),
         name: feat.name.clone(),
         subtype: feat.subtype.clone(),
         class: feat.class.clone(),
-        height_m: default_height_meters(feat) as f32,
+        height_m: height_m as f32,
+        source_height_m,
+        height_method,
         min_height_m: feat.min_height.unwrap_or(0.0) as f32,
         roof_height_m: feat.roof_height.unwrap_or(0.0) as f32,
         roof_shape: feat.roof_shape.clone(),
