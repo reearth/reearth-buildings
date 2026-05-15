@@ -15,10 +15,12 @@ import { LOD_MODE } from "./lod";
  * meaning of the geometry at every zoom, so a flip must invalidate the
  * whole URL space.
  */
+// v4: Lambert (roughness=1) building material. Visual change in the glb
+// payload, so existing v3 caches are no longer correct.
 // v3: Overture Maps Buildings + Re:Earth Terrain ground placement.
 // Earlier (v2) URL paths used Protomaps OSM and EGM2008 anchoring and
 // no longer make sense.
-const RENDERER_VERSION = "v3";
+const RENDERER_VERSION = "v4";
 export const IMPL_VERSION = `${RENDERER_VERSION}-${LOD_MODE}`;
 
 /**

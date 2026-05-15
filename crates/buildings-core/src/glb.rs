@@ -168,10 +168,15 @@ pub fn write_glb(mesh: &Mesh, enu_to_ecef: [f64; 16]) -> Vec<u8> {
         "materials": [{
             "name": "buildings",
             "doubleSided": false,
+            // Pure Lambert: metallicFactor=0 + roughnessFactor=1 collapses
+            // glTF's GGX specular term to zero, so shading reduces to
+            // baseColor × max(0, dot(N, L)) — no specular highlight on
+            // facade edges. Avoids the "shiny mall" look the previous
+            // 0.9 roughness produced under sharp midday sun.
             "pbrMetallicRoughness": {
-                "baseColorFactor": [0.78, 0.78, 0.78, 1.0],
+                "baseColorFactor": [0.92, 0.92, 0.92, 1.0],
                 "metallicFactor": 0.0,
-                "roughnessFactor": 0.9
+                "roughnessFactor": 1.0
             }
         }],
         "accessors": [

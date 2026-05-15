@@ -114,6 +114,22 @@ const HTML = `<!DOCTYPE html>
   // Sun-tracking globe lighting (otherwise side walls go black when the
   // sun's dot product with the normal is ~0).
   viewer.scene.globe.enableLighting = true;
+  // Depth-test against terrain → anything geometrically below the
+  // terrain surface (building bases dropped under ground by min_height,
+  // tile content from a lower-altitude pass, etc.) is occluded by the
+  // globe rather than showing through. Also stops the camera from
+  // looking "into" the planet from underground.
+  viewer.scene.globe.depthTestAgainstTerrain = true;
+  // Make the planet appear solid when the camera does end up below
+  // terrain — instead of seeing the ground from underneath, the globe
+  // renders as opaque black so underground content stays hidden.
+  viewer.scene.globe.undergroundColor = Cesium.Color.BLACK;
+  viewer.scene.globe.undergroundColorAlphaByDistance = new Cesium.NearFarScalar(
+    0.0,
+    1.0,
+    1.0,
+    1.0,
+  );
   // Atmosphere & sky polish.
   viewer.scene.skyAtmosphere.show = true;
   if (viewer.scene.skyBox) viewer.scene.skyBox.show = true;
