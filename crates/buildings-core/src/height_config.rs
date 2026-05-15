@@ -82,7 +82,11 @@ impl FootprintCurve {
 impl Default for HeightConfig {
     fn default() -> Self {
         Self {
-            meters_per_floor: 3.0,
+            // 3.3 m/floor: chosen to fit Overture commercial buildings
+            // without blowing up residential. Residential walk-ups are
+            // ~2.7-3.0 m, commercial offices ~3.5-4.0 m; 3.3 is the
+            // compromise the height-optimizer settled on across 5 cities.
+            meters_per_floor: 3.3,
             class_height_m: default_class_table(),
             subtype_height_m: default_subtype_table(),
             urban_thresholds: UrbanThresholds {
@@ -96,7 +100,14 @@ impl Default for HeightConfig {
                         FootprintBucket { max_area_m2: 60.0, height_m: 12.0 },
                         FootprintBucket { max_area_m2: 200.0, height_m: 15.0 },
                         FootprintBucket { max_area_m2: 800.0, height_m: 18.0 },
-                        FootprintBucket { max_area_m2: SENTINEL_OPEN, height_m: 15.0 },
+                        // Catch-all bumped 15 → 24: large CBD lots
+                        // (>800 m²) are typically full-block office or
+                        // retail towers, not "big-box at street level"
+                        // as the original 15 m comment assumed. Iiyama
+                        // / Tsukuba town centres also classify
+                        // DenseUrban but rarely have features in this
+                        // bucket, so the bump targets actual CBDs.
+                        FootprintBucket { max_area_m2: SENTINEL_OPEN, height_m: 24.0 },
                     ],
                 },
                 urban: FootprintCurve {
@@ -142,8 +153,18 @@ fn default_class_table() -> HashMap<String, f64> {
     entries(&[
         (&["house", "detached", "semidetached_house", "terrace", "bungalow",
            "static_caravan", "houseboat"], 6.0),
-        (&["apartments", "residential", "dormitory", "hotel"], 25.0),
-        (&["office", "commercial"], 30.0),
+        (&["apartments", "residential", "dormitory"], 25.0),
+        // Hotel split out of the apartments group: chiyoda CBD hotels
+        // averaged 60 m of truth vs the 25 m default (-36 m bias);
+        // 35 m halves the gap without overshooting suburban hotels.
+        (&["hotel"], 35.0),
+        // Office bumped 30 → 40: Marunouchi towers were -35 m biased
+        // at 30, while suburban offices (Yokohama Nishi-ku) were +26 m
+        // over. 40 splits the difference better than either extreme.
+        // Commercial held at 30 — bimodal between strip-mall retail
+        // and CBD high-rise; bumping it caused regressions elsewhere.
+        (&["office"], 40.0),
+        (&["commercial"], 30.0),
         (&["retail", "supermarket", "shop", "kiosk", "mall"], 6.0),
         (&["school", "kindergarten", "university", "college", "civic",
            "government", "public", "library", "museum", "theatre"], 12.0),

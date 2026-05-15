@@ -48,8 +48,13 @@ against PLATEAU LOD1 `bldg:measuredHeight`.
 
 ## Recommendation
 
-`candidate-tuned-v3.toml` is the best TOML-only tuning we found. To go
-further, we'd need code changes — e.g. a "city-context" classifier that
-distinguishes Marunouchi (Tokyo CBD, hundreds of high-rises) from
-Iiyama centre (small town, one main street). The `density` slice can
-then have its own table per context tier.
+`candidate-tuned-v3.toml` is the best TOML-only tuning we found. **As
+of the current commit, `HeightConfig::default()` IS the v3 values** —
+the worker now ships with these. `baseline.toml` is regenerated from
+`Default` so the two are byte-identical; `candidate-tuned-v3.toml` is
+kept as the historical record of the change.
+
+To go further, we'd need code changes — e.g. a "city-context"
+classifier that distinguishes Marunouchi (Tokyo CBD, hundreds of
+high-rises) from Iiyama centre (small town, one main street). The
+`density` slice can then have its own table per context tier.
