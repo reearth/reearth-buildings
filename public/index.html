@@ -13,10 +13,12 @@
      Assort  #2a3f55 (slate blue)
      Accent  #c95f3d (terracotta) */
   .overlay {
-    position: absolute; background: rgba(242, 239, 232, 0.94); color: #2a3f55;
+    position: absolute; background: rgba(242, 239, 232, 0.7); color: #2a3f55;
     padding: 10px 12px; border-radius: 8px;
     font: 12px/1.45 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
     box-shadow: 0 4px 20px rgba(42, 63, 85, 0.18);
+    backdrop-filter: blur(10px) saturate(140%);
+    -webkit-backdrop-filter: blur(10px) saturate(140%);
     box-sizing: border-box;
   }
   /* Cesium's credit display sits along the very bottom; lift the
@@ -31,26 +33,12 @@
   #toggle .title { font-size: 13px; font-weight: 600; letter-spacing: 0.2px; margin-right: 8px; }
   #toggle .title a { color: #2a3f55; text-decoration: none; }
   #toggle .title a:hover { text-decoration: underline; }
-  #toggle button,
   #btn-get-started {
-    background: #fff; color: #2a3f55; border: 1px solid #d8d2c4;
+    background: #c95f3d; border: 1px solid #c95f3d; color: #fff;
     padding: 5px 10px; border-radius: 6px; font: inherit; cursor: pointer;
-  }
-  #toggle button:hover { border-color: #2a3f55; }
-  #toggle button.active { background: #2a3f55; color: #f2efe8; border-color: #2a3f55; }
-  #toggle button[disabled] { opacity: 0.5; cursor: not-allowed; }
-  #toggle .note { color: #7c8794; font-size: 11px; }
-  #toggle .sep { color: #c8c0b0; }
-  #toggle .label { color: #7c8794; font-size: 11px; margin: 0 4px 0 4px; }
-  #toggle #btn-get-started {
-    background: #c95f3d; border-color: #c95f3d; color: #fff;
     font-weight: 700; letter-spacing: 0.3px;
-    box-shadow: 0 2px 12px rgba(201, 95, 61, 0.4);
   }
-  #toggle #btn-get-started:hover {
-    background: #b8502f; border-color: #b8502f;
-    box-shadow: 0 2px 16px rgba(201, 95, 61, 0.55);
-  }
+  #btn-get-started:hover { background: #b8502f; border-color: #b8502f; }
 
   /* Bottom-right credit. Lifted above Cesium's inline credit bar
      (which lives at the very bottom centre-ish) so the two don't
@@ -59,7 +47,9 @@
     position: absolute; right: 8px; bottom: 32px;
     font: 11px/1.4 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
     color: #2a3f55;
-    background: rgba(242, 239, 232, 0.85); padding: 4px 8px; border-radius: 6px;
+    background: rgba(242, 239, 232, 0.6); padding: 4px 8px; border-radius: 6px;
+    backdrop-filter: blur(10px) saturate(140%);
+    -webkit-backdrop-filter: blur(10px) saturate(140%);
     pointer-events: auto;
   }
   #credit a { color: #2a3f55; text-decoration: none; }
@@ -117,9 +107,8 @@
 
   @media (max-width: 640px) {
     #toggle { gap: 6px 4px; padding: 8px 10px; font-size: 12px; }
-    #toggle .title { margin-right: 4px; flex-basis: 100%; margin-bottom: 4px; }
-    #toggle .sep { display: none; }
-    #toggle button, #btn-get-started { padding: 6px 9px; font-size: 12px; }
+    #toggle .title { margin-right: 4px; }
+    #btn-get-started { padding: 6px 9px; font-size: 12px; }
     #status { max-width: calc(100vw - 24px); font-size: 11px; }
     #credit { font-size: 10px; right: 4px; bottom: 30px; }
     #modal header { padding: 12px 14px; }
@@ -138,16 +127,7 @@
 </div>
 <div id="toggle" class="overlay">
   <span class="title"><a href="/">Re:Earth Buildings</a></span>
-  <button id="btn-ours" class="active" type="button">ours</button>
-  <button id="btn-cesium" type="button">Cesium OSM</button>
-  <span class="sep">|</span>
-  <span class="label">terrain</span>
-  <button id="btn-terrain-re" class="active" type="button">Re:Earth</button>
-  <button id="btn-terrain-cwt" type="button">Cesium</button>
-  <button id="btn-terrain-off" type="button">off</button>
-  <span class="sep">|</span>
   <button id="btn-get-started" type="button">Get Started</button>
-  <span class="note" id="toggle-note"></span>
 </div>
 <div id="credit">
   <a class="gh" href="https://github.com/eukarya-inc/reearth-buildings" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository">
@@ -218,6 +198,13 @@ Terrain: <a href="https://terrain.reearth.land/" target="_blank" rel="noopener n
       </p>
 
       <p class="ref">
+        Heights: where the source data provides a height we use it; otherwise
+        we estimate one from footprint area, neighbours, and land use.
+        Estimated heights are plausible but not accurate — don't use them
+        for analysis that depends on real building dimensions.
+      </p>
+
+      <p class="ref">
         Note: this is a best-effort community service with no SLA or uptime
         guarantee. Use at your own risk, and please don't rely on it for
         production traffic without hosting your own mirror.
@@ -243,12 +230,6 @@ Terrain: <a href="https://terrain.reearth.land/" target="_blank" rel="noopener n
   const pitch = Number(params.get("pitch") ?? -30);
   const debug = params.get("debug") === "1";
   const sse = Number(params.get("sse") ?? 16);
-  // Custom Cesium Ion token (for the OSM Buildings comparison toggle).
-  // The SDK ships with a default token suitable for dev evaluation but
-  // it has lower rate limits; supply your own via ?ion=... for stable
-  // testing.
-  const ionToken = params.get("ion");
-  if (ionToken) Cesium.Ion.defaultAccessToken = ionToken;
 
   // Re:Earth Terrain quantized-mesh — fetched up-front so the first
   // camera render already has terrain. Failure is non-fatal (the viewer
@@ -384,113 +365,9 @@ Terrain: <a href="https://terrain.reearth.land/" target="_blank" rel="noopener n
     console.error("tile failed:", url, msg);
   });
 
-  // ----- Cesium OSM Buildings comparison toggle -----
-  // Lazy: only fetch Cesium OSM Buildings on first click. Falls back to
-  // a "Cesium Ion needed" hint when the request 401s, so the dev page
-  // still works without a configured token.
-  const btnOurs = document.getElementById("btn-ours");
-  const btnCesium = document.getElementById("btn-cesium");
-  const toggleNote = document.getElementById("toggle-note");
-  let cesiumOsm = null;
-  let cesiumOsmLoading = null;
-
-  function setActive(which) {
-    btnOurs.classList.toggle("active", which === "ours");
-    btnCesium.classList.toggle("active", which === "cesium");
-    tileset.show = which === "ours";
-    if (cesiumOsm) cesiumOsm.show = which === "cesium";
-  }
-
-  async function ensureCesiumOsm() {
-    if (cesiumOsm) return cesiumOsm;
-    if (cesiumOsmLoading) return cesiumOsmLoading;
-    btnCesium.disabled = true;
-    toggleNote.textContent = "loading Cesium OSM Buildings…";
-    cesiumOsmLoading = Cesium.createOsmBuildingsAsync()
-      .then((t) => {
-        cesiumOsm = t;
-        cesiumOsm.show = false;
-        viewer.scene.primitives.add(cesiumOsm);
-        toggleNote.textContent = "";
-        return cesiumOsm;
-      })
-      .catch((err) => {
-        console.error("Cesium OSM Buildings load failed", err);
-        toggleNote.textContent = 'needs Ion token: ?ion=...';
-        return null;
-      })
-      .finally(() => {
-        btnCesium.disabled = false;
-        cesiumOsmLoading = null;
-      });
-    return cesiumOsmLoading;
-  }
-
-  btnOurs.addEventListener("click", () => setActive("ours"));
-  btnCesium.addEventListener("click", async () => {
-    const loaded = await ensureCesiumOsm();
-    if (loaded) setActive("cesium");
-  });
-
-  // ----- Terrain switcher (Re:Earth ↔ Cesium World Terrain ↔ off) -----
-  // Buildings have ground elevation baked in (sampled from Re:Earth
-  // Terrain at render time). Re:Earth = ground meets the building
-  // bases cleanly. CWT = different vertical reference (Cesium uses
-  // ellipsoidal heights too but the source DEM differs); some offset
-  // is expected. Off = buildings sit above a flat ellipsoid.
-  const btnReTerrain = document.getElementById("btn-terrain-re");
-  const btnCwt = document.getElementById("btn-terrain-cwt");
-  const btnOffTerrain = document.getElementById("btn-terrain-off");
-  let reTerrain = initialTerrain ?? null;
-  let cwtTerrain = null;
-  // Track current terrain mode so the active button stays in sync even
-  // when a load fails.
-  let terrainMode = initialTerrain ? "re" : "off";
-  function setTerrainButtons(active) {
-    btnReTerrain.classList.toggle("active", active === "re");
-    btnCwt.classList.toggle("active", active === "cwt");
-    btnOffTerrain.classList.toggle("active", active === "off");
-  }
-  setTerrainButtons(terrainMode);
-
-  async function switchTerrain(target) {
-    if (terrainMode === target) return;
-    btnReTerrain.disabled = btnCwt.disabled = btnOffTerrain.disabled = true;
-    try {
-      if (target === "re") {
-        if (!reTerrain) {
-          reTerrain = await Cesium.CesiumTerrainProvider.fromUrl(
-            "https://terrain.reearth.land/cesium-mesh/ellipsoid",
-            { requestVertexNormals: true, requestWaterMask: false },
-          );
-        }
-        viewer.scene.setTerrain(new Cesium.Terrain(Promise.resolve(reTerrain)));
-      } else if (target === "cwt") {
-        if (!cwtTerrain) cwtTerrain = await Cesium.createWorldTerrainAsync();
-        viewer.scene.setTerrain(new Cesium.Terrain(Promise.resolve(cwtTerrain)));
-      } else {
-        viewer.scene.setTerrain(
-          new Cesium.Terrain(Promise.resolve(new Cesium.EllipsoidTerrainProvider())),
-        );
-      }
-      terrainMode = target;
-      setTerrainButtons(terrainMode);
-      toggleNote.textContent = "";
-    } catch (err) {
-      console.error("terrain switch failed", err);
-      toggleNote.textContent = target === "cwt" ? "Cesium terrain needs Ion token: ?ion=..." : "terrain load failed";
-    } finally {
-      btnReTerrain.disabled = btnCwt.disabled = btnOffTerrain.disabled = false;
-    }
-  }
-  btnReTerrain.addEventListener("click", () => switchTerrain("re"));
-  btnCwt.addEventListener("click", () => switchTerrain("cwt"));
-  btnOffTerrain.addEventListener("click", () => switchTerrain("off"));
-
-  // Feature attributes show up in Cesium's built-in InfoBox; the
-  // EXT_structural_metadata path produces the same getProperty()
-  // surface as the older b3dm batch table, so the InfoBox renders
-  // them automatically for both ours and the Cesium OSM tileset.
+  // Feature attributes show up in Cesium's built-in InfoBox via the
+  // EXT_structural_metadata path (same getProperty() surface as the
+  // older b3dm batch table), so the InfoBox renders them automatically.
 
   // ----- Get-started modal -----
   const modal = document.getElementById("modal-backdrop");
