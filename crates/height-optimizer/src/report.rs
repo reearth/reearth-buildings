@@ -24,12 +24,17 @@ pub fn render_markdown(
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "<production defaults>".to_string())
     ));
-    out.push_str(&format!("- **candidate**: `{}`\n", candidate_path.display()));
+    out.push_str(&format!(
+        "- **candidate**: `{}`\n",
+        candidate_path.display()
+    ));
     out.push_str(&format!("- **Overture release**: `{release}`\n\n"));
 
     // Top-line summary table.
     out.push_str("## Summary (overall residuals)\n\n");
-    out.push_str("| city | n | MAE base→cand | RMSE base→cand | bias base→cand | <20% base→cand |\n");
+    out.push_str(
+        "| city | n | MAE base→cand | RMSE base→cand | bias base→cand | <20% base→cand |\n",
+    );
     out.push_str("|---|---:|---|---|---|---|\n");
     for s in sections {
         let b = &s.baseline.overall;
@@ -58,7 +63,10 @@ pub fn render_markdown(
         ));
 
         out.push_str("### Overall\n\n");
-        push_compare_table(&mut out, &[("OVERALL", &s.baseline.overall, &s.candidate.overall)]);
+        push_compare_table(
+            &mut out,
+            &[("OVERALL", &s.baseline.overall, &s.candidate.overall)],
+        );
 
         out.push_str("\n### By height_method\n\n");
         let rows = pair_rows(&s.baseline.by_method, &s.candidate.by_method);

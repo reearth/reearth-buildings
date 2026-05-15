@@ -78,20 +78,22 @@ fn main() -> Result<()> {
             for c in cities::all() {
                 println!(
                     "{:18} city={} bbox=[{:.4},{:.4},{:.4},{:.4}] -- {}",
-                    c.name, c.city_code, c.bbox.west, c.bbox.south, c.bbox.east, c.bbox.north,
+                    c.name,
+                    c.city_code,
+                    c.bbox.west,
+                    c.bbox.south,
+                    c.bbox.east,
+                    c.bbox.north,
                     c.note
                 );
             }
         }
         Cmd::DumpPlateau { preset, cache } => {
-            let city = cities::get(&preset)
-                .ok_or_else(|| anyhow::anyhow!("unknown preset: {preset}"))?;
+            let city =
+                cities::get(&preset).ok_or_else(|| anyhow::anyhow!("unknown preset: {preset}"))?;
             let cache_dir = cache.unwrap_or_else(default_cache_dir);
-            let buildings = fetch_plateau::fetch_lod1(
-                city.city_code,
-                &city.bbox,
-                &cache_dir.join("plateau"),
-            )?;
+            let buildings =
+                fetch_plateau::fetch_lod1(city.city_code, &city.bbox, &cache_dir.join("plateau"))?;
             eprintln!("fetched {} PLATEAU buildings", buildings.len());
             for b in &buildings {
                 println!(
@@ -151,12 +153,7 @@ fn main() -> Result<()> {
                 });
             }
 
-            let md = report::render_markdown(
-                &sections,
-                baseline.as_deref(),
-                &candidate,
-                &release,
-            );
+            let md = report::render_markdown(&sections, baseline.as_deref(), &candidate, &release);
             match out {
                 Some(p) => {
                     std::fs::write(&p, md)?;
@@ -181,12 +178,10 @@ fn run_pipeline(
     cache: &std::path::Path,
     cfg: &HeightConfig,
 ) -> Result<PipelineResult> {
-    let city = cities::get(preset)
-        .ok_or_else(|| anyhow::anyhow!("unknown preset: {preset}"))?;
+    let city = cities::get(preset).ok_or_else(|| anyhow::anyhow!("unknown preset: {preset}"))?;
 
     eprintln!("== PLATEAU truth ({}) ==", city.name);
-    let truths =
-        fetch_plateau::fetch_lod1(city.city_code, &city.bbox, &cache.join("plateau"))?;
+    let truths = fetch_plateau::fetch_lod1(city.city_code, &city.bbox, &cache.join("plateau"))?;
     eprintln!("PLATEAU buildings (in bbox, height>0): {}", truths.len());
 
     eprintln!("== Overture estimate ({}) ==", city.name);
@@ -203,18 +198,25 @@ fn run_pipeline(
         .collect();
     let mesh_sources: Vec<mesh::Source<'_>> = decoded
         .iter()
-        .map(|(z, x, y, t)| mesh::Source { z: *z, x: *x, y: *y, tile: t })
+        .map(|(z, x, y, t)| mesh::Source {
+            z: *z,
+            x: *x,
+            y: *y,
+            tile: t,
+        })
         .collect();
     let estimates = mesh::extract_buildings(&mesh_sources, cfg);
     let in_bbox: Vec<_> = estimates
         .into_iter()
-        .filter(|e| city.bbox.contains_lonlat(e.centroid.lon_deg, e.centroid.lat_deg))
+        .filter(|e| {
+            city.bbox
+                .contains_lonlat(e.centroid.lon_deg, e.centroid.lat_deg)
+        })
         .collect();
     eprintln!("Overture buildings (in bbox): {}", in_bbox.len());
 
     let m = matcher::match_buildings(&truths, &in_bbox);
-    let report =
-        metrics::build_report(&m.pairs, m.unmatched_truth, truths.len(), in_bbox.len());
+    let report = metrics::build_report(&m.pairs, m.unmatched_truth, truths.len(), in_bbox.len());
     Ok(PipelineResult {
         city_name: city.name.to_string(),
         city_note: city.note.to_string(),
@@ -225,8 +227,7 @@ fn run_pipeline(
 fn load_config(path: Option<&std::path::Path>) -> Result<HeightConfig> {
     match path {
         Some(p) => {
-            let s = std::fs::read_to_string(p)
-                .with_context(|| format!("read {}", p.display()))?;
+            let s = std::fs::read_to_string(p).with_context(|| format!("read {}", p.display()))?;
             toml::from_str(&s).with_context(|| format!("parse {}", p.display()))
         }
         None => Ok(HeightConfig::default()),

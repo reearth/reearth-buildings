@@ -7,7 +7,7 @@
 
 use crate::fetch_plateau::Building as PlateauBuilding;
 use buildings_core::{coord::LonLat, ExtractedBuilding};
-use rstar::{primitives::Rectangle, primitives::GeomWithData, RTree, RTreeObject, AABB};
+use rstar::{primitives::GeomWithData, primitives::Rectangle, RTree, RTreeObject, AABB};
 
 /// Wraps a polygon's bounding box; the `usize` payload is the index
 /// into the `estimates` slice.
@@ -84,10 +84,18 @@ fn ring_rect(ring: &[LonLat]) -> Option<Rectangle<[f64; 2]>> {
     let mut min = [f64::INFINITY; 2];
     let mut max = [f64::NEG_INFINITY; 2];
     for p in ring {
-        if p.lon_deg < min[0] { min[0] = p.lon_deg; }
-        if p.lat_deg < min[1] { min[1] = p.lat_deg; }
-        if p.lon_deg > max[0] { max[0] = p.lon_deg; }
-        if p.lat_deg > max[1] { max[1] = p.lat_deg; }
+        if p.lon_deg < min[0] {
+            min[0] = p.lon_deg;
+        }
+        if p.lat_deg < min[1] {
+            min[1] = p.lat_deg;
+        }
+        if p.lon_deg > max[0] {
+            max[0] = p.lon_deg;
+        }
+        if p.lat_deg > max[1] {
+            max[1] = p.lat_deg;
+        }
     }
     Some(Rectangle::from_corners(min, max))
 }

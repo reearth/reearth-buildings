@@ -210,8 +210,7 @@ pub fn extract_buildings(
     height_config: &HeightConfig,
 ) -> Vec<ExtractedBuilding> {
     let total_buildings: usize = sources.iter().map(|s| s.tile.buildings.len()).sum();
-    let avg_per_source =
-        total_buildings as f32 / (sources.len().max(1) as f32);
+    let avg_per_source = total_buildings as f32 / (sources.len().max(1) as f32);
     let urban = classify_urban(avg_per_source, height_config);
 
     struct Pending {
@@ -230,8 +229,7 @@ pub fn extract_buildings(
             let polygons = group_polygons(&feat.rings);
             for polygon in polygons {
                 let area = polygon_area_m2(&polygon, source, source.tile.extent) as f32;
-                let centroid_ll =
-                    polygon_centroid_lonlat(&polygon, source, source.tile.extent);
+                let centroid_ll = polygon_centroid_lonlat(&polygon, source, source.tile.extent);
                 let outer_ll: Vec<LonLat> = polygon
                     .outer
                     .iter()
@@ -308,15 +306,17 @@ pub fn extract_buildings(
                 subtype: b.props.subtype.clone(),
                 ..Default::default()
             };
-            let (h, method) =
-                default_height_meters(&pseudo, b.total_area_m2, urban, height_config);
+            let (h, method) = default_height_meters(&pseudo, b.total_area_m2, urban, height_config);
             let centroid = if b.centroid_w > 0.0 {
                 LonLat {
                     lon_deg: b.centroid_lon_w / b.centroid_w,
                     lat_deg: b.centroid_lat_w / b.centroid_w,
                 }
             } else {
-                LonLat { lon_deg: 0.0, lat_deg: 0.0 }
+                LonLat {
+                    lon_deg: 0.0,
+                    lat_deg: 0.0,
+                }
             };
             ExtractedBuilding {
                 feature_id: b.props.feature_id,
@@ -359,6 +359,7 @@ struct PendingFeature {
     centroid_weight: f64,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_mesh(
     out_z: u8,
     out_x: u32,
@@ -375,8 +376,7 @@ pub fn build_mesh(
     // Captures the "this is downtown" signal so the footprint heuristic
     // doesn't render Marunouchi as a row of huts.
     let total_buildings: usize = sources.iter().map(|s| s.tile.buildings.len()).sum();
-    let avg_per_source =
-        total_buildings as f32 / (sources.len().max(1) as f32);
+    let avg_per_source = total_buildings as f32 / (sources.len().max(1) as f32);
     let urban = classify_urban(avg_per_source, height_config);
 
     // ---- 1. collect all fragments, grouping by feature id ----
@@ -391,8 +391,7 @@ pub fn build_mesh(
             }
             for polygon in polygons {
                 let area = polygon_area_m2(&polygon, source, source.tile.extent) as f32;
-                let centroid_ll =
-                    polygon_centroid_lonlat(&polygon, source, source.tile.extent);
+                let centroid_ll = polygon_centroid_lonlat(&polygon, source, source.tile.extent);
                 let polygon = if aabb_only {
                     polygon_to_aabb(&polygon)
                 } else {
@@ -516,10 +515,7 @@ fn feature_props(
     cfg: &HeightConfig,
 ) -> FeatureProps {
     let (height_m, height_method) = default_height_meters(feat, area_m2, urban, cfg);
-    let source_height_m = feat
-        .height
-        .filter(|h| *h > 0.0)
-        .map(|h| h as f32);
+    let source_height_m = feat.height.filter(|h| *h > 0.0).map(|h| h as f32);
     FeatureProps {
         feature_id: feat.id,
         gers_id: feat.gers_id.clone(),
@@ -536,10 +532,7 @@ fn feature_props(
         roof_color: feat.roof_color.clone(),
         facade_material: feat.facade_material.clone(),
         facade_color: feat.facade_color.clone(),
-        num_floors: feat
-            .num_floors
-            .unwrap_or(0)
-            .min(u16::MAX as u32) as u16,
+        num_floors: feat.num_floors.unwrap_or(0).min(u16::MAX as u32) as u16,
         ground_elev_m: 0.0,
         footprint_m2: area_m2,
     }
@@ -666,8 +659,7 @@ fn polygon_centroid_lonlat(polygon: &Polygon, source: &Source<'_>, extent: u32) 
         return coord::tile_center(source.z, source.x, source.y);
     }
     for p in &polygon.outer {
-        let ll =
-            coord::tile_xy_to_lonlat(source.z, source.x, source.y, extent, p[0], p[1]);
+        let ll = coord::tile_xy_to_lonlat(source.z, source.x, source.y, extent, p[0], p[1]);
         sum_lon += ll.lon_deg;
         sum_lat += ll.lat_deg;
     }

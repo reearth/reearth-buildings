@@ -90,7 +90,10 @@ pub fn fetch_lod1(city_code: &str, bbox: &BBox, cache: &Path) -> Result<Vec<Buil
                 "[{done_n}/{total}] {}  features={} → in_bbox={}",
                 short_url(url),
                 ids.len(),
-                nested.as_ref().map(|v| v.iter().map(|x| x.len()).sum::<usize>()).unwrap_or(0)
+                nested
+                    .as_ref()
+                    .map(|v| v.iter().map(|x| x.len()).sum::<usize>())
+                    .unwrap_or(0)
             );
             Ok(nested?.into_iter().flatten().collect())
         })
@@ -112,7 +115,10 @@ fn building_from_record(r: &Value) -> Option<Building> {
     let lng = center.get("lng").and_then(|v| v.as_f64())?;
     let lat = center.get("lat").and_then(|v| v.as_f64())?;
     Some(Building {
-        centroid: LonLat { lon_deg: lng, lat_deg: lat },
+        centroid: LonLat {
+            lon_deg: lng,
+            lat_deg: lat,
+        },
         measured_height_m: h as f32,
     })
 }
@@ -120,8 +126,7 @@ fn building_from_record(r: &Value) -> Option<Building> {
 fn list_bldg_gml_urls(city_code: &str, cache: &Path) -> Result<Vec<String>> {
     let url = format!("{API_BASE}/datacatalog/citygml/{city_code}");
     let bytes = fetch_with_cache(&url, cache, "json")?;
-    let doc: Value = serde_json::from_slice(&bytes)
-        .with_context(|| format!("parse {url}"))?;
+    let doc: Value = serde_json::from_slice(&bytes).with_context(|| format!("parse {url}"))?;
     let cities = doc
         .get("cities")
         .and_then(|v| v.as_array())
@@ -200,9 +205,7 @@ fn fetch_with_cache(url: &str, cache: &Path, ext: &str) -> Result<Vec<u8>> {
     let mut last_err: Option<anyhow::Error> = None;
     for attempt in 0..MAX_ATTEMPTS {
         if attempt > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(
-                500u64 * (1u64 << attempt),
-            ));
+            std::thread::sleep(std::time::Duration::from_millis(500u64 * (1u64 << attempt)));
         }
         match ureq::get(url)
             .timeout(std::time::Duration::from_secs(180))

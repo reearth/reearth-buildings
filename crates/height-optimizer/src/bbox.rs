@@ -10,7 +10,12 @@ pub struct BBox {
 
 impl BBox {
     pub fn new(west: f64, south: f64, east: f64, north: f64) -> Self {
-        Self { west, south, east, north }
+        Self {
+            west,
+            south,
+            east,
+            north,
+        }
     }
 
     pub fn contains_lonlat(&self, lon: f64, lat: f64) -> bool {
@@ -24,4 +29,3 @@ impl BBox {
             || other.south > self.north)
     }
 }
-

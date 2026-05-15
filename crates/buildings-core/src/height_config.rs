@@ -97,9 +97,18 @@ impl Default for HeightConfig {
             footprint: FootprintTable {
                 dense_urban: FootprintCurve {
                     buckets: vec![
-                        FootprintBucket { max_area_m2: 60.0, height_m: 12.0 },
-                        FootprintBucket { max_area_m2: 200.0, height_m: 15.0 },
-                        FootprintBucket { max_area_m2: 800.0, height_m: 18.0 },
+                        FootprintBucket {
+                            max_area_m2: 60.0,
+                            height_m: 12.0,
+                        },
+                        FootprintBucket {
+                            max_area_m2: 200.0,
+                            height_m: 15.0,
+                        },
+                        FootprintBucket {
+                            max_area_m2: 800.0,
+                            height_m: 18.0,
+                        },
                         // Catch-all bumped 15 → 24: large CBD lots
                         // (>800 m²) are typically full-block office or
                         // retail towers, not "big-box at street level"
@@ -107,31 +116,70 @@ impl Default for HeightConfig {
                         // / Tsukuba town centres also classify
                         // DenseUrban but rarely have features in this
                         // bucket, so the bump targets actual CBDs.
-                        FootprintBucket { max_area_m2: SENTINEL_OPEN, height_m: 24.0 },
+                        FootprintBucket {
+                            max_area_m2: SENTINEL_OPEN,
+                            height_m: 24.0,
+                        },
                     ],
                 },
                 urban: FootprintCurve {
                     buckets: vec![
-                        FootprintBucket { max_area_m2: 60.0, height_m: 9.0 },
-                        FootprintBucket { max_area_m2: 200.0, height_m: 9.0 },
-                        FootprintBucket { max_area_m2: 800.0, height_m: 12.0 },
-                        FootprintBucket { max_area_m2: SENTINEL_OPEN, height_m: 12.0 },
+                        FootprintBucket {
+                            max_area_m2: 60.0,
+                            height_m: 9.0,
+                        },
+                        FootprintBucket {
+                            max_area_m2: 200.0,
+                            height_m: 9.0,
+                        },
+                        FootprintBucket {
+                            max_area_m2: 800.0,
+                            height_m: 12.0,
+                        },
+                        FootprintBucket {
+                            max_area_m2: SENTINEL_OPEN,
+                            height_m: 12.0,
+                        },
                     ],
                 },
                 suburban: FootprintCurve {
                     buckets: vec![
-                        FootprintBucket { max_area_m2: 60.0, height_m: 6.0 },
-                        FootprintBucket { max_area_m2: 200.0, height_m: 6.0 },
-                        FootprintBucket { max_area_m2: 800.0, height_m: 9.0 },
-                        FootprintBucket { max_area_m2: SENTINEL_OPEN, height_m: 10.0 },
+                        FootprintBucket {
+                            max_area_m2: 60.0,
+                            height_m: 6.0,
+                        },
+                        FootprintBucket {
+                            max_area_m2: 200.0,
+                            height_m: 6.0,
+                        },
+                        FootprintBucket {
+                            max_area_m2: 800.0,
+                            height_m: 9.0,
+                        },
+                        FootprintBucket {
+                            max_area_m2: SENTINEL_OPEN,
+                            height_m: 10.0,
+                        },
                     ],
                 },
                 rural: FootprintCurve {
                     buckets: vec![
-                        FootprintBucket { max_area_m2: 60.0, height_m: 4.0 },
-                        FootprintBucket { max_area_m2: 200.0, height_m: 6.0 },
-                        FootprintBucket { max_area_m2: 800.0, height_m: 9.0 },
-                        FootprintBucket { max_area_m2: SENTINEL_OPEN, height_m: 10.0 },
+                        FootprintBucket {
+                            max_area_m2: 60.0,
+                            height_m: 4.0,
+                        },
+                        FootprintBucket {
+                            max_area_m2: 200.0,
+                            height_m: 6.0,
+                        },
+                        FootprintBucket {
+                            max_area_m2: 800.0,
+                            height_m: 9.0,
+                        },
+                        FootprintBucket {
+                            max_area_m2: SENTINEL_OPEN,
+                            height_m: 10.0,
+                        },
                     ],
                 },
             },
@@ -151,8 +199,18 @@ fn entries(pairs: &[(&[&str], f64)]) -> HashMap<String, f64> {
 
 fn default_class_table() -> HashMap<String, f64> {
     entries(&[
-        (&["house", "detached", "semidetached_house", "terrace", "bungalow",
-           "static_caravan", "houseboat"], 6.0),
+        (
+            &[
+                "house",
+                "detached",
+                "semidetached_house",
+                "terrace",
+                "bungalow",
+                "static_caravan",
+                "houseboat",
+            ],
+            6.0,
+        ),
         (&["apartments", "residential", "dormitory"], 25.0),
         // Hotel split out of the apartments group: chiyoda CBD hotels
         // averaged 60 m of truth vs the 25 m default (-36 m bias);
@@ -166,18 +224,63 @@ fn default_class_table() -> HashMap<String, f64> {
         (&["office"], 40.0),
         (&["commercial"], 30.0),
         (&["retail", "supermarket", "shop", "kiosk", "mall"], 6.0),
-        (&["school", "kindergarten", "university", "college", "civic",
-           "government", "public", "library", "museum", "theatre"], 12.0),
+        (
+            &[
+                "school",
+                "kindergarten",
+                "university",
+                "college",
+                "civic",
+                "government",
+                "public",
+                "library",
+                "museum",
+                "theatre",
+            ],
+            12.0,
+        ),
         (&["hospital", "clinic"], 18.0),
         (&["industrial", "warehouse", "factory", "manufacture"], 10.0),
         (&["garage", "garages", "carport", "parking"], 4.0),
-        (&["shed", "hut", "container", "cabin", "tent", "service"], 3.0),
-        (&["barn", "farm", "farm_auxiliary", "cowshed", "stable", "sty",
-           "greenhouse", "silo"], 5.0),
-        (&["church", "chapel", "cathedral", "mosque", "temple", "synagogue",
-           "shrine", "religious", "monastery"], 12.0),
-        (&["stadium", "sports_hall", "sports_centre", "grandstand"], 15.0),
-        (&["train_station", "bus_station", "terminal", "transportation"], 12.0),
+        (
+            &["shed", "hut", "container", "cabin", "tent", "service"],
+            3.0,
+        ),
+        (
+            &[
+                "barn",
+                "farm",
+                "farm_auxiliary",
+                "cowshed",
+                "stable",
+                "sty",
+                "greenhouse",
+                "silo",
+            ],
+            5.0,
+        ),
+        (
+            &[
+                "church",
+                "chapel",
+                "cathedral",
+                "mosque",
+                "temple",
+                "synagogue",
+                "shrine",
+                "religious",
+                "monastery",
+            ],
+            12.0,
+        ),
+        (
+            &["stadium", "sports_hall", "sports_centre", "grandstand"],
+            15.0,
+        ),
+        (
+            &["train_station", "bus_station", "terminal", "transportation"],
+            12.0,
+        ),
     ])
 }
 

@@ -155,8 +155,8 @@ async fn fetch_one(
     x: u32,
     y: u32,
 ) -> Result<Option<Vec<u8>>> {
-    let coord = pmtiles::TileCoord::new(z, x, y)
-        .map_err(|e| anyhow!("invalid tile {z}/{x}/{y}: {e}"))?;
+    let coord =
+        pmtiles::TileCoord::new(z, x, y).map_err(|e| anyhow!("invalid tile {z}/{x}/{y}: {e}"))?;
     let res: Option<bytes::Bytes> = reader.get_tile(coord).await?;
     Ok(res.map(|b| b.to_vec()))
 }

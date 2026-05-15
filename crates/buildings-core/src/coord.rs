@@ -72,8 +72,7 @@ pub fn ecef_to_wgs84(p: [f64; 3]) -> (LonLat, f64) {
     let theta = (z * A).atan2(r * b);
     let sin_t = theta.sin();
     let cos_t = theta.cos();
-    let lat = (z + ep2 * b * sin_t * sin_t * sin_t)
-        .atan2(r - E2 * A * cos_t * cos_t * cos_t);
+    let lat = (z + ep2 * b * sin_t * sin_t * sin_t).atan2(r - E2 * A * cos_t * cos_t * cos_t);
     let lon = y.atan2(x);
     let n = A / (1.0 - E2 * lat.sin() * lat.sin()).sqrt();
     let h = r / lat.cos() - n;

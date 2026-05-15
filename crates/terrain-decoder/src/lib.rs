@@ -58,8 +58,8 @@ pub fn decode_terrarium_webp(z: u8, x: u32, y: u32, bytes: &[u8]) -> Result<Terr
     }
 
     Ok(TerrainTile {
-        width: w as u32,
-        height: h as u32,
+        width: w,
+        height: h,
         z,
         x,
         y,

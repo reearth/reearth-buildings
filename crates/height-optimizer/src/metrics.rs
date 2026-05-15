@@ -34,9 +34,17 @@ impl Stats {
             sum_signed += r;
             abs_residuals.push(r.abs() as f32);
             let truth = p.truth.measured_height_m as f64;
-            let pct = if truth > 0.0 { r.abs() / truth } else { f64::INFINITY };
-            if pct < 0.20 { hits20 += 1; }
-            if pct < 0.50 { hits50 += 1; }
+            let pct = if truth > 0.0 {
+                r.abs() / truth
+            } else {
+                f64::INFINITY
+            };
+            if pct < 0.20 {
+                hits20 += 1;
+            }
+            if pct < 0.50 {
+                hits50 += 1;
+            }
         }
         abs_residuals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let p50 = abs_residuals[n * 50 / 100];
@@ -89,9 +97,18 @@ pub fn build_report(
     }
     Report {
         overall: Stats::compute(&all),
-        by_method: by_method.into_iter().map(|(k, v)| (k, Stats::compute(&v))).collect(),
-        by_class: by_class.into_iter().map(|(k, v)| (k, Stats::compute(&v))).collect(),
-        by_subtype: by_subtype.into_iter().map(|(k, v)| (k, Stats::compute(&v))).collect(),
+        by_method: by_method
+            .into_iter()
+            .map(|(k, v)| (k, Stats::compute(&v)))
+            .collect(),
+        by_class: by_class
+            .into_iter()
+            .map(|(k, v)| (k, Stats::compute(&v)))
+            .collect(),
+        by_subtype: by_subtype
+            .into_iter()
+            .map(|(k, v)| (k, Stats::compute(&v)))
+            .collect(),
         unmatched_truth,
         n_truth,
         n_estimate,
