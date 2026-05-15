@@ -5,6 +5,15 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+# Cancel in-flight runs of the same branch/PR — pushes during a build are
+# common and the second one supersedes the first.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
@@ -46,21 +55,24 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm
+          cache-targets: true
       - run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - working-directory: crates/buildings-wasm
         run: wasm-pack build --target bundler --release
 
   ts:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/worker
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm
+          cache-targets: true
       - uses: pnpm/action-setup@v4
         with:
           version: 9
@@ -68,10 +80,62 @@ jobs:
         with:
           node-version: "22"
           cache: pnpm
-          cache-dependency-path: apps/worker/pnpm-lock.yaml
       - run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:wasm
       - run: pnpm lint
       - run: pnpm typecheck
+      # wrangler deploy --dry-run doubles as a bundle-size / config sanity
+      # check; it fails the build on missing bindings, oversized payload,
+      # or syntax errors the typecheck wouldn't catch.
       - run: pnpm exec wrangler deploy --dry-run --outdir=dist
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || 'dry-run-noop' }}
+
+  deploy:
+    name: Deploy (Cloudflare Workers)
+    needs: [rust-fmt, rust-clippy, rust-test, wasm-build, ts]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # Use a GitHub Environment so the CLOUDFLARE_API_TOKEN can be scoped
+    # to main-branch deploys and (optionally) gated by required reviewers.
+    environment: production
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      # Reuse the same cache key as the build jobs so deploy can pick up
+      # warm artifacts from the PR/main build that just passed.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm
+          cache-targets: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build WASM
+        run: pnpm build:wasm
+
+      # wrangler.toml pins account_id and the R2 bucket name, so the only
+      # thing CI needs to supply is the API token.
+      - name: Wrangler deploy
+        run: pnpm exec wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

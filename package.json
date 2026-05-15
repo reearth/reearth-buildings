@@ -9,8 +9,6 @@
     "build": "pnpm run build:wasm && wrangler deploy --dry-run --outdir dist",
     "dev": "pnpm run build:wasm && wrangler dev",
     "deploy": "pnpm run build:wasm && wrangler deploy",
-    "deploy:staging": "pnpm run build:wasm && wrangler deploy --env staging",
-    "deploy:prod": "pnpm run build:wasm && wrangler deploy --env prod",
     "cf-typegen": "wrangler types --strict-vars false",
     "typecheck": "pnpm run cf-typegen && tsc --noEmit",
     "lint": "biome check src",

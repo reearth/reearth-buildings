@@ -36,7 +36,7 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     return c.text(`only z=${MIN_Z}..${MAX_Z} is served`, 404);
   }
 
-  const release = await currentPmtilesDate(c.env);
+  const release = await currentPmtilesDate();
 
   // Fetch the source MVTs that contribute to this output tile.
   const sourceCoords = childCoordsAtZ(z, x, y, MAX_Z);

@@ -1,4 +1,3 @@
-import type { Env } from "./env";
 import { LOD_MODE } from "./lod";
 
 /**
@@ -29,21 +28,25 @@ export const IMPL_VERSION = `${RENDERER_VERSION}-${LOD_MODE}`;
  */
 const UPSTREAM_BUCKET = "https://overturemaps-tiles-us-west-2-beta.s3.amazonaws.com";
 
-const KV_LATEST_KEY = "overture:latest";
-const KV_LATEST_TTL_SECONDS = 86400;
+const LATEST_CACHE_URL = "https://cache.local/overture-latest";
+const LATEST_CACHE_TTL_SECONDS = 86400;
 
 /**
  * Resolve the upstream Overture release to fetch from. Auto-discovers via
- * a KV-cached S3 ListBucket; for reproducible repros, pin a release by
- * pre-populating the KV namespace under "overture:latest".
+ * the Workers Cache API on top of an S3 ListBucket call.
  */
-export async function currentPmtilesDate(env: Env): Promise<string> {
-  const cached = await env.PMTILES_DIR.get(KV_LATEST_KEY);
-  if (cached) return cached;
+export async function currentPmtilesDate(): Promise<string> {
+  const cacheKey = new Request(LATEST_CACHE_URL);
+  const cache = caches.default;
+  const hit = await cache.match(cacheKey);
+  if (hit) return await hit.text();
   const fresh = await probeLatestRelease();
-  await env.PMTILES_DIR.put(KV_LATEST_KEY, fresh, {
-    expirationTtl: KV_LATEST_TTL_SECONDS,
-  });
+  await cache.put(
+    cacheKey,
+    new Response(fresh, {
+      headers: { "Cache-Control": `max-age=${LATEST_CACHE_TTL_SECONDS}` },
+    }),
+  );
   return fresh;
 }
 
