@@ -11,6 +11,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Sentinel "catch-all" upper bound for the last [`FootprintBucket`] in
+/// each [`FootprintCurve`]. f32::INFINITY would be cleaner but TOML
+/// rejects non-finite floats; 1e9 m² is comfortably larger than any
+/// real building footprint while staying serialisable.
+pub const SENTINEL_OPEN: f32 = 1.0e9;
+
 /// Top-level config for [`crate::mesh::default_height_meters`] and
 /// [`crate::mesh::classify_urban`]. Cheap to clone (a few hundred bytes
 /// of strings); pass by reference into the mesh builder.
@@ -90,7 +96,7 @@ impl Default for HeightConfig {
                         FootprintBucket { max_area_m2: 60.0, height_m: 12.0 },
                         FootprintBucket { max_area_m2: 200.0, height_m: 15.0 },
                         FootprintBucket { max_area_m2: 800.0, height_m: 18.0 },
-                        FootprintBucket { max_area_m2: f32::INFINITY, height_m: 15.0 },
+                        FootprintBucket { max_area_m2: SENTINEL_OPEN, height_m: 15.0 },
                     ],
                 },
                 urban: FootprintCurve {
@@ -98,7 +104,7 @@ impl Default for HeightConfig {
                         FootprintBucket { max_area_m2: 60.0, height_m: 9.0 },
                         FootprintBucket { max_area_m2: 200.0, height_m: 9.0 },
                         FootprintBucket { max_area_m2: 800.0, height_m: 12.0 },
-                        FootprintBucket { max_area_m2: f32::INFINITY, height_m: 12.0 },
+                        FootprintBucket { max_area_m2: SENTINEL_OPEN, height_m: 12.0 },
                     ],
                 },
                 suburban: FootprintCurve {
@@ -106,7 +112,7 @@ impl Default for HeightConfig {
                         FootprintBucket { max_area_m2: 60.0, height_m: 6.0 },
                         FootprintBucket { max_area_m2: 200.0, height_m: 6.0 },
                         FootprintBucket { max_area_m2: 800.0, height_m: 9.0 },
-                        FootprintBucket { max_area_m2: f32::INFINITY, height_m: 10.0 },
+                        FootprintBucket { max_area_m2: SENTINEL_OPEN, height_m: 10.0 },
                     ],
                 },
                 rural: FootprintCurve {
@@ -114,7 +120,7 @@ impl Default for HeightConfig {
                         FootprintBucket { max_area_m2: 60.0, height_m: 4.0 },
                         FootprintBucket { max_area_m2: 200.0, height_m: 6.0 },
                         FootprintBucket { max_area_m2: 800.0, height_m: 9.0 },
-                        FootprintBucket { max_area_m2: f32::INFINITY, height_m: 10.0 },
+                        FootprintBucket { max_area_m2: SENTINEL_OPEN, height_m: 10.0 },
                     ],
                 },
             },

@@ -1,0 +1,131 @@
+# Candidate A: Marunouchi-aware tweaks based on chiyoda eval
+#   - office / commercial: 30 → 60 (Tokyo CBD typical)
+#   - hotel: 25 → 45
+#   - meters_per_floor: 3.0 → 3.5 (commercial floor heights are taller)
+#   - DenseUrban footprint: bump 200-800 m² bucket 18 → 24
+# Other values copied verbatim from `presets/baseline.toml`.
+
+meters_per_floor = 3.5
+
+[urban_thresholds]
+dense_urban_min = 1500.0
+urban_min = 800.0
+suburban_min = 200.0
+
+[class_height_m]
+hotel = 45.0
+service = 3.0
+bus_station = 12.0
+public = 12.0
+silo = 5.0
+sports_centre = 15.0
+supermarket = 6.0
+college = 12.0
+commercial = 60.0
+farm = 5.0
+sports_hall = 15.0
+barn = 5.0
+shrine = 12.0
+apartments = 25.0
+detached = 6.0
+office = 60.0
+grandstand = 15.0
+train_station = 12.0
+container = 3.0
+clinic = 18.0
+static_caravan = 6.0
+school = 12.0
+sty = 5.0
+industrial = 10.0
+mosque = 12.0
+library = 12.0
+residential = 25.0
+cowshed = 5.0
+farm_auxiliary = 5.0
+tent = 3.0
+carport = 4.0
+dormitory = 25.0
+church = 12.0
+terminal = 12.0
+transportation = 12.0
+religious = 12.0
+cabin = 3.0
+parking = 4.0
+museum = 12.0
+terrace = 6.0
+university = 12.0
+chapel = 12.0
+cathedral = 12.0
+temple = 12.0
+retail = 6.0
+stadium = 15.0
+government = 12.0
+hospital = 18.0
+manufacture = 10.0
+warehouse = 10.0
+synagogue = 12.0
+factory = 10.0
+shop = 6.0
+greenhouse = 5.0
+hut = 3.0
+bungalow = 6.0
+houseboat = 6.0
+civic = 12.0
+mall = 6.0
+shed = 3.0
+garage = 4.0
+garages = 4.0
+kiosk = 6.0
+house = 6.0
+theatre = 12.0
+"semidetached_house" = 6.0
+monastery = 12.0
+kindergarten = 12.0
+stable = 5.0
+
+[subtype_height_m]
+agricultural = 5.0
+service = 5.0
+medical = 18.0
+commercial = 15.0
+civic = 12.0
+education = 12.0
+military = 8.0
+outbuilding = 5.0
+religious = 12.0
+residential = 8.0
+transportation = 8.0
+entertainment = 12.0
+industrial = 10.0
+
+[footprint.dense_urban]
+buckets = [
+  { max_area_m2 = 60.0, height_m = 12.0 },
+  { max_area_m2 = 200.0, height_m = 15.0 },
+  { max_area_m2 = 800.0, height_m = 24.0 },  # 18 → 24 (mid-rise CBD)
+  { max_area_m2 = 1000000000.0, height_m = 18.0 },
+]
+
+[footprint.urban]
+buckets = [
+  { max_area_m2 = 60.0, height_m = 9.0 },
+  { max_area_m2 = 200.0, height_m = 9.0 },
+  { max_area_m2 = 800.0, height_m = 12.0 },
+  { max_area_m2 = 1000000000.0, height_m = 12.0 },
+]
+
+[footprint.suburban]
+buckets = [
+  { max_area_m2 = 60.0, height_m = 6.0 },
+  { max_area_m2 = 200.0, height_m = 6.0 },
+  { max_area_m2 = 800.0, height_m = 9.0 },
+  { max_area_m2 = 1000000000.0, height_m = 10.0 },
+]
+
+[footprint.rural]
+buckets = [
+  { max_area_m2 = 60.0, height_m = 4.0 },
+  { max_area_m2 = 200.0, height_m = 6.0 },
+  { max_area_m2 = 800.0, height_m = 9.0 },
+  { max_area_m2 = 1000000000.0, height_m = 10.0 },
+]

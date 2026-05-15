@@ -1,11 +1,4 @@
 //! Calibration CLI for the buildings-core height estimator.
-//!
-//! See README at the crate root for the design / methodology. Short
-//! version: fetch PLATEAU LOD1 buildings as truth (centroid +
-//! measuredHeight), fetch the same area's Overture buildings, run our
-//! `default_height_meters` cascade against each Overture building,
-//! match Overture↔PLATEAU by point-in-polygon, summarise the
-//! residuals.
 
 mod bbox;
 mod cities;
@@ -13,6 +6,7 @@ mod fetch_overture;
 mod fetch_plateau;
 mod matcher;
 mod metrics;
+mod report;
 
 use anyhow::{Context, Result};
 use buildings_core::{mesh, HeightConfig};
@@ -38,24 +32,42 @@ enum Cmd {
         #[arg(long)]
         cache: Option<PathBuf>,
     },
-    /// Run the full eval: PLATEAU truth ↔ Overture estimate, print
-    /// sliced residual stats. Uses `HeightConfig::default()` unless
-    /// `--config` is given.
+    /// Print the production-default HeightConfig as TOML. Useful as a
+    /// starting point for hand-tuning.
+    DumpConfig {
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Evaluate one preset against a single config (default if --config
+    /// is omitted).
     Eval {
         #[arg(long)]
         preset: String,
-        /// PLATEAU/Overture cache root. Default:
-        /// `target/height-optimizer-cache`.
         #[arg(long)]
         cache: Option<PathBuf>,
-        /// Override Overture release (yyyy-mm-dd-…). Default: probe
-        /// the upstream bucket for the latest non-beta release.
         #[arg(long)]
         release: Option<String>,
-        /// Path to a TOML HeightConfig override. If omitted, the
-        /// production defaults are used.
         #[arg(long)]
         config: Option<PathBuf>,
+    },
+    /// Run baseline (default if --baseline omitted) + candidate
+    /// across one or more presets and emit a side-by-side Markdown
+    /// report.
+    Compare {
+        /// Comma-separated preset names (e.g. `chiyoda,setagaya`).
+        #[arg(long)]
+        presets: String,
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+        #[arg(long)]
+        candidate: PathBuf,
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        #[arg(long)]
+        release: Option<String>,
+        /// Path to write the Markdown report. Default: stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
 }
 
@@ -75,8 +87,11 @@ fn main() -> Result<()> {
             let city = cities::get(&preset)
                 .ok_or_else(|| anyhow::anyhow!("unknown preset: {preset}"))?;
             let cache_dir = cache.unwrap_or_else(default_cache_dir);
-            let buildings =
-                fetch_plateau::fetch_lod1(city.city_code, &city.bbox, &cache_dir)?;
+            let buildings = fetch_plateau::fetch_lod1(
+                city.city_code,
+                &city.bbox,
+                &cache_dir.join("plateau"),
+            )?;
             eprintln!("fetched {} PLATEAU buildings", buildings.len());
             for b in &buildings {
                 println!(
@@ -85,55 +100,98 @@ fn main() -> Result<()> {
                 );
             }
         }
+        Cmd::DumpConfig { out } => {
+            let cfg = HeightConfig::default();
+            let toml_str = toml::to_string_pretty(&cfg)?;
+            match out {
+                Some(p) => std::fs::write(&p, toml_str)
+                    .with_context(|| format!("write {}", p.display()))?,
+                None => print!("{toml_str}"),
+            }
+        }
         Cmd::Eval {
             preset,
             cache,
             release,
             config,
-        } => run_eval(&preset, cache, release, config)?,
+        } => {
+            let cache_dir = cache.unwrap_or_else(default_cache_dir);
+            let cfg = load_config(config.as_deref())?;
+            let release = resolve_release(release)?;
+            let result = run_pipeline(&preset, &release, &cache_dir, &cfg)?;
+            metrics::print_report(
+                &format!("{} ({})", result.city_name, result.city_note),
+                &result.report,
+            );
+        }
+        Cmd::Compare {
+            presets,
+            baseline,
+            candidate,
+            cache,
+            release,
+            out,
+        } => {
+            let cache_dir = cache.unwrap_or_else(default_cache_dir);
+            let baseline_cfg = load_config(baseline.as_deref())?;
+            let candidate_cfg = load_config(Some(&candidate))?;
+            let release = resolve_release(release)?;
+            let names: Vec<&str> = presets.split(',').map(|s| s.trim()).collect();
+
+            let mut sections: Vec<report::ComparisonSection> = Vec::new();
+            for name in &names {
+                eprintln!("\n############ {name} ############");
+                let base = run_pipeline(name, &release, &cache_dir, &baseline_cfg)?;
+                let cand = run_pipeline(name, &release, &cache_dir, &candidate_cfg)?;
+                sections.push(report::ComparisonSection {
+                    city_name: base.city_name,
+                    city_note: base.city_note,
+                    baseline: base.report,
+                    candidate: cand.report,
+                });
+            }
+
+            let md = report::render_markdown(
+                &sections,
+                baseline.as_deref(),
+                &candidate,
+                &release,
+            );
+            match out {
+                Some(p) => {
+                    std::fs::write(&p, md)?;
+                    eprintln!("wrote {}", p.display());
+                }
+                None => println!("{md}"),
+            }
+        }
     }
     Ok(())
 }
 
-fn run_eval(
+struct PipelineResult {
+    city_name: String,
+    city_note: String,
+    report: metrics::Report,
+}
+
+fn run_pipeline(
     preset: &str,
-    cache: Option<PathBuf>,
-    release: Option<String>,
-    config: Option<PathBuf>,
-) -> Result<()> {
+    release: &str,
+    cache: &std::path::Path,
+    cfg: &HeightConfig,
+) -> Result<PipelineResult> {
     let city = cities::get(preset)
         .ok_or_else(|| anyhow::anyhow!("unknown preset: {preset}"))?;
-    let cache_dir = cache.unwrap_or_else(default_cache_dir);
-    std::fs::create_dir_all(&cache_dir).ok();
 
-    let cfg: HeightConfig = match config {
-        Some(p) => {
-            let s = std::fs::read_to_string(&p)
-                .with_context(|| format!("read {}", p.display()))?;
-            toml::from_str(&s).with_context(|| format!("parse {}", p.display()))?
-        }
-        None => HeightConfig::default(),
-    };
-
-    eprintln!("== PLATEAU truth ==");
+    eprintln!("== PLATEAU truth ({}) ==", city.name);
     let truths =
-        fetch_plateau::fetch_lod1(city.city_code, &city.bbox, &cache_dir.join("plateau"))?;
-    eprintln!("PLATEAU buildings (height>0, in bbox): {}", truths.len());
+        fetch_plateau::fetch_lod1(city.city_code, &city.bbox, &cache.join("plateau"))?;
+    eprintln!("PLATEAU buildings (in bbox, height>0): {}", truths.len());
 
-    eprintln!("\n== Overture release ==");
-    let release = match release {
-        Some(r) => r,
-        None => {
-            let r = fetch_overture::latest_release()?;
-            eprintln!("auto-discovered release: {r}");
-            r
-        }
-    };
-    let raw_sources =
-        fetch_overture::fetch_bbox(&release, &city.bbox, &cache_dir.join("overture"))?;
-    eprintln!("downloaded {} Overture tiles", raw_sources.len());
-
-    let decoded: Vec<(u8, u32, u32, mvt_decoder::DecodedTile)> = raw_sources
+    eprintln!("== Overture estimate ({}) ==", city.name);
+    let raw = fetch_overture::fetch_bbox(release, &city.bbox, &cache.join("overture"))?;
+    let decoded: Vec<(u8, u32, u32, mvt_decoder::DecodedTile)> = raw
         .iter()
         .filter_map(|s| match decode_buildings(&s.bytes) {
             Ok(d) => Some((s.z, s.x, s.y, d)),
@@ -147,19 +205,41 @@ fn run_eval(
         .iter()
         .map(|(z, x, y, t)| mesh::Source { z: *z, x: *x, y: *y, tile: t })
         .collect();
-    let estimates = mesh::extract_buildings(&mesh_sources, &cfg);
+    let estimates = mesh::extract_buildings(&mesh_sources, cfg);
     let in_bbox: Vec<_> = estimates
         .into_iter()
         .filter(|e| city.bbox.contains_lonlat(e.centroid.lon_deg, e.centroid.lat_deg))
         .collect();
     eprintln!("Overture buildings (in bbox): {}", in_bbox.len());
 
-    eprintln!("\n== Match + score ==");
     let m = matcher::match_buildings(&truths, &in_bbox);
     let report =
         metrics::build_report(&m.pairs, m.unmatched_truth, truths.len(), in_bbox.len());
-    metrics::print_report(&format!("{} ({})", city.name, city.note), &report);
-    Ok(())
+    Ok(PipelineResult {
+        city_name: city.name.to_string(),
+        city_note: city.note.to_string(),
+        report,
+    })
+}
+
+fn load_config(path: Option<&std::path::Path>) -> Result<HeightConfig> {
+    match path {
+        Some(p) => {
+            let s = std::fs::read_to_string(p)
+                .with_context(|| format!("read {}", p.display()))?;
+            toml::from_str(&s).with_context(|| format!("parse {}", p.display()))
+        }
+        None => Ok(HeightConfig::default()),
+    }
+}
+
+fn resolve_release(release: Option<String>) -> Result<String> {
+    if let Some(r) = release {
+        return Ok(r);
+    }
+    let r = fetch_overture::latest_release()?;
+    eprintln!("auto-discovered Overture release: {r}");
+    Ok(r)
 }
 
 fn default_cache_dir() -> PathBuf {
