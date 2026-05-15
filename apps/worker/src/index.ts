@@ -1,10 +1,29 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import type { Env } from "./env";
 import { glbTile } from "./routes/glb";
 import { subTilesetJson, tilesetJson } from "./routes/tileset";
 import { viewerHtml } from "./routes/viewer";
 
 const app = new Hono<{ Bindings: Env }>();
+
+// Public dataset — every endpoint is GET-only, but Cesium / MapLibre /
+// three.js loaders sometimes preflight (e.g. when headers like
+// `If-None-Match` are added by intermediaries), so wire up a permissive
+// CORS layer that handles OPTIONS up front. Individual route handlers
+// still set their own `Access-Control-Allow-Origin: *` for clarity, but
+// the middleware fills in `Allow-Methods` / `Allow-Headers` and 204s
+// the preflight.
+app.use(
+  "*",
+  cors({
+    origin: "*",
+    allowMethods: ["GET", "HEAD", "OPTIONS"],
+    allowHeaders: ["*"],
+    exposeHeaders: ["ETag", "Cache-Control", "Content-Type"],
+    maxAge: 86400,
+  }),
+);
 
 app.get("/", viewerHtml);
 app.get("/healthz", (c) => c.text("ok"));

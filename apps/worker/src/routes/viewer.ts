@@ -38,6 +38,7 @@ const HTML = `<!DOCTYPE html>
   #toggle button[disabled] { opacity: 0.5; cursor: not-allowed; }
   #toggle .note { color: #8b95a4; font-size: 11px; }
   #toggle .sep { color: #404652; }
+  #toggle .label { color: #8b95a4; font-size: 11px; margin: 0 4px 0 4px; }
 </style>
 </head>
 <body>
@@ -51,7 +52,10 @@ const HTML = `<!DOCTYPE html>
   <button id="btn-ours" class="active" type="button">ours</button>
   <button id="btn-cesium" type="button">Cesium OSM</button>
   <span class="sep">|</span>
-  <button id="btn-terrain" type="button">terrain</button>
+  <span class="label">terrain</span>
+  <button id="btn-terrain-re" class="active" type="button">Re:Earth</button>
+  <button id="btn-terrain-cwt" type="button">Cesium</button>
+  <button id="btn-terrain-off" type="button">off</button>
   <span class="note" id="toggle-note"></span>
 </div>
 <script type="module">
@@ -74,18 +78,62 @@ const HTML = `<!DOCTYPE html>
   const ionToken = params.get("ion");
   if (ionToken) Cesium.Ion.defaultAccessToken = ionToken;
 
+  // Re:Earth Terrain quantized-mesh — fetched up-front so the first
+  // camera render already has terrain. Failure is non-fatal (the viewer
+  // falls back to the bare ellipsoid).
+  let initialTerrain;
+  try {
+    initialTerrain = await Cesium.CesiumTerrainProvider.fromUrl(
+      "https://terrain.reearth.land/cesium-mesh/ellipsoid",
+      { requestVertexNormals: true, requestWaterMask: false },
+    );
+  } catch (err) {
+    console.warn("initial Re:Earth Terrain load failed", err);
+  }
+
   const viewer = new Cesium.Viewer("app", {
     baseLayer: Cesium.ImageryLayer.fromProviderAsync(
       Promise.resolve(new Cesium.OpenStreetMapImageryProvider({ url: "https://tile.openstreetmap.org/" })),
     ),
+    terrain: initialTerrain ? new Cesium.Terrain(Promise.resolve(initialTerrain)) : undefined,
     baseLayerPicker: false, geocoder: false, homeButton: false,
     sceneModePicker: false, navigationHelpButton: false,
     timeline: false, animation: false, fullscreenButton: false,
+    skyBox: undefined,        // Cesium's default starfield SkyBox
+    skyAtmosphere: undefined, // Cesium's default sky/atmosphere shader
+    // requestRenderMode → only render when something actually changes
+    // (camera, time, tiles loaded, …). With our fixed clock and the
+    // terrain/buildings tilesets there's no need for a 60 fps draw
+    // loop; this drops idle GPU usage to ~0.
+    requestRenderMode: true,
+    // We pin the clock manually for deterministic shadows; suppress
+    // time-driven re-renders by making the threshold infinite.
+    maximumRenderTimeChange: Infinity,
   });
-  // Enable Cesium's sun-tracking lighting on the globe; side walls were
-  // appearing black because the default ambient term alone left them
-  // unlit when the sun's dot product with the normal was ~0.
+
+  // Sun-tracking globe lighting (otherwise side walls go black when the
+  // sun's dot product with the normal is ~0).
   viewer.scene.globe.enableLighting = true;
+  // Atmosphere & sky polish.
+  viewer.scene.skyAtmosphere.show = true;
+  if (viewer.scene.skyBox) viewer.scene.skyBox.show = true;
+  if (viewer.scene.sun) viewer.scene.sun.show = true;
+  if (viewer.scene.moon) viewer.scene.moon.show = true;
+  // Cesium's "fast approximate" atmosphere is on by default; fog adds
+  // distance falloff that makes the city feel less paper-flat.
+  viewer.scene.fog.enabled = true;
+  viewer.scene.fog.density = 1e-4;
+  // Shadows from the sun on the globe AND on the building tileset.
+  viewer.shadows = true;
+  viewer.scene.globe.shadows = Cesium.ShadowMode.RECEIVE_ONLY;
+  // Soft shadow filtering — single-tap point-source shadows look harsh.
+  viewer.shadowMap.softShadows = true;
+  viewer.shadowMap.size = 2048;
+  // Pin a daytime clock so shadows are visible regardless of when the
+  // page loads (without this, midnight UTC looks completely lit by
+  // the moon term and there are no useful shadows).
+  viewer.clock.currentTime = Cesium.JulianDate.fromIso8601("2024-06-21T03:00:00Z");
+
   viewer.camera.setView({
     destination: Cesium.Cartesian3.fromDegrees(lon, lat, height),
     orientation: {
@@ -104,6 +152,7 @@ const HTML = `<!DOCTYPE html>
     maximumScreenSpaceError: sse,
     debugShowBoundingVolume: debug,
   });
+  tileset.shadows = Cesium.ShadowMode.ENABLED;
   viewer.scene.primitives.add(tileset);
   // Required ODbL attribution for the OSM-derived buildings + Overture's
   // ML-augmented additions, plus Re:Earth Terrain for ground placement.
@@ -186,18 +235,32 @@ const HTML = `<!DOCTYPE html>
     if (loaded) setActive("cesium");
   });
 
-  // ----- Terrain toggle (ellipsoid ↔ Re:Earth Terrain) -----
-  // Our buildings already have ground elevation baked in (sampled from
-  // Re:Earth Terrain at render time). Toggling Re:Earth Terrain on
-  // therefore makes the ground meet the building bases cleanly; toggle
-  // off and the buildings appear floating above the ellipsoid.
-  const btnTerrain = document.getElementById("btn-terrain");
-  let terrainOn = false;
-  let reTerrain = null;
-  btnTerrain.addEventListener("click", async () => {
-    btnTerrain.disabled = true;
+  // ----- Terrain switcher (Re:Earth ↔ Cesium World Terrain ↔ off) -----
+  // Buildings have ground elevation baked in (sampled from Re:Earth
+  // Terrain at render time). Re:Earth = ground meets the building
+  // bases cleanly. CWT = different vertical reference (Cesium uses
+  // ellipsoidal heights too but the source DEM differs); some offset
+  // is expected. Off = buildings sit above a flat ellipsoid.
+  const btnReTerrain = document.getElementById("btn-terrain-re");
+  const btnCwt = document.getElementById("btn-terrain-cwt");
+  const btnOffTerrain = document.getElementById("btn-terrain-off");
+  let reTerrain = initialTerrain ?? null;
+  let cwtTerrain = null;
+  // Track current terrain mode so the active button stays in sync even
+  // when a load fails.
+  let terrainMode = initialTerrain ? "re" : "off";
+  function setTerrainButtons(active) {
+    btnReTerrain.classList.toggle("active", active === "re");
+    btnCwt.classList.toggle("active", active === "cwt");
+    btnOffTerrain.classList.toggle("active", active === "off");
+  }
+  setTerrainButtons(terrainMode);
+
+  async function switchTerrain(target) {
+    if (terrainMode === target) return;
+    btnReTerrain.disabled = btnCwt.disabled = btnOffTerrain.disabled = true;
     try {
-      if (!terrainOn) {
+      if (target === "re") {
         if (!reTerrain) {
           reTerrain = await Cesium.CesiumTerrainProvider.fromUrl(
             "https://terrain.reearth.land/cesium-mesh/ellipsoid",
@@ -205,20 +268,27 @@ const HTML = `<!DOCTYPE html>
           );
         }
         viewer.scene.setTerrain(new Cesium.Terrain(Promise.resolve(reTerrain)));
-        terrainOn = true;
-        btnTerrain.classList.add("active");
+      } else if (target === "cwt") {
+        if (!cwtTerrain) cwtTerrain = await Cesium.createWorldTerrainAsync();
+        viewer.scene.setTerrain(new Cesium.Terrain(Promise.resolve(cwtTerrain)));
       } else {
-        viewer.scene.setTerrain(new Cesium.Terrain(Promise.resolve(new Cesium.EllipsoidTerrainProvider())));
-        terrainOn = false;
-        btnTerrain.classList.remove("active");
+        viewer.scene.setTerrain(
+          new Cesium.Terrain(Promise.resolve(new Cesium.EllipsoidTerrainProvider())),
+        );
       }
+      terrainMode = target;
+      setTerrainButtons(terrainMode);
+      toggleNote.textContent = "";
     } catch (err) {
-      console.error("terrain toggle failed", err);
-      toggleNote.textContent = "terrain load failed";
+      console.error("terrain switch failed", err);
+      toggleNote.textContent = target === "cwt" ? "Cesium terrain needs Ion token: ?ion=..." : "terrain load failed";
     } finally {
-      btnTerrain.disabled = false;
+      btnReTerrain.disabled = btnCwt.disabled = btnOffTerrain.disabled = false;
     }
-  });
+  }
+  btnReTerrain.addEventListener("click", () => switchTerrain("re"));
+  btnCwt.addEventListener("click", () => switchTerrain("cwt"));
+  btnOffTerrain.addEventListener("click", () => switchTerrain("off"));
 
   // Feature attributes show up in Cesium's built-in InfoBox; the
   // EXT_structural_metadata path produces the same getProperty()
