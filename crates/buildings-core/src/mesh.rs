@@ -8,6 +8,7 @@
 //! at each building's centroid.
 
 use crate::coord::{self, LonLat};
+use crate::height_config::HeightConfig;
 use mvt_decoder::{BuildingFeature, DecodedTile};
 use std::collections::HashMap;
 use terrain_decoder::TerrainTile;
@@ -108,12 +109,13 @@ impl UrbanLevel {
 /// are tuned against Japanese urban patterns; rural Hokkaido sits well
 /// below 200, Tokyo 23-ku averages 800–2000, Marunouchi-class blocks
 /// push past 1500.
-pub fn classify_urban(avg_buildings_per_source: f32) -> UrbanLevel {
-    if avg_buildings_per_source >= 1500.0 {
+pub fn classify_urban(avg_buildings_per_source: f32, cfg: &HeightConfig) -> UrbanLevel {
+    let t = &cfg.urban_thresholds;
+    if avg_buildings_per_source >= t.dense_urban_min {
         UrbanLevel::DenseUrban
-    } else if avg_buildings_per_source >= 800.0 {
+    } else if avg_buildings_per_source >= t.urban_min {
         UrbanLevel::Urban
-    } else if avg_buildings_per_source >= 200.0 {
+    } else if avg_buildings_per_source >= t.suburban_min {
         UrbanLevel::Suburban
     } else {
         UrbanLevel::Rural
@@ -136,6 +138,7 @@ pub fn default_height_meters(
     feat: &BuildingFeature,
     area_m2: f32,
     urban: UrbanLevel,
+    cfg: &HeightConfig,
 ) -> (f64, &'static str) {
     if let Some(h) = feat.height {
         if h > 0.0 {
@@ -144,20 +147,26 @@ pub fn default_height_meters(
     }
     if let Some(l) = feat.num_floors {
         if l > 0 {
-            return ((l as f64) * 3.0, "num_floors");
+            return ((l as f64) * cfg.meters_per_floor, "num_floors");
         }
     }
     if let Some(cls) = feat.class.as_deref() {
-        if let Some(h) = class_default_height(cls) {
-            return (h, "class");
+        if let Some(h) = cfg.class_height_m.get(cls) {
+            return (*h, "class");
         }
     }
     if let Some(st) = feat.subtype.as_deref() {
-        if let Some(h) = subtype_default_height(st) {
-            return (h, "subtype");
+        if let Some(h) = cfg.subtype_height_m.get(st) {
+            return (*h, "subtype");
         }
     }
-    let h = footprint_default_height(area_m2, urban);
+    let curve = match urban {
+        UrbanLevel::DenseUrban => &cfg.footprint.dense_urban,
+        UrbanLevel::Urban => &cfg.footprint.urban,
+        UrbanLevel::Suburban => &cfg.footprint.suburban,
+        UrbanLevel::Rural => &cfg.footprint.rural,
+    };
+    let h = curve.lookup(area_m2);
     let method = if urban == UrbanLevel::Rural {
         "footprint"
     } else {
@@ -166,115 +175,6 @@ pub fn default_height_meters(
         "density"
     };
     (h, method)
-}
-
-/// Representative height by Overture `class` enum. Returns `None` for
-/// unrecognised classes so the caller can fall through to subtype /
-/// footprint heuristics. Values are deliberately conservative so we
-/// undershoot rather than tower over a neighbourhood.
-fn class_default_height(class: &str) -> Option<f64> {
-    Some(match class {
-        // Single-family residential
-        "house" | "detached" | "semidetached_house" | "terrace" | "bungalow"
-        | "static_caravan" | "houseboat" => 6.0,
-        // Multi-family / dense residential
-        "apartments" | "residential" | "dormitory" | "hotel" => 25.0,
-        // Office / commercial mid-to-high-rise
-        "office" | "commercial" => 30.0,
-        // Retail — typically low-rise even when large
-        "retail" | "supermarket" | "shop" | "kiosk" | "mall" => 6.0,
-        // Education / public institutions
-        "school" | "kindergarten" | "university" | "college" | "civic"
-        | "government" | "public" | "library" | "museum" | "theatre" => 12.0,
-        // Healthcare
-        "hospital" | "clinic" => 18.0,
-        // Industrial
-        "industrial" | "warehouse" | "factory" | "manufacture" => 10.0,
-        // Vehicle storage / utility
-        "garage" | "garages" | "carport" | "parking" => 4.0,
-        // Sheds / minor structures
-        "shed" | "hut" | "container" | "cabin" | "tent" | "service" => 3.0,
-        // Agricultural
-        "barn" | "farm" | "farm_auxiliary" | "cowshed" | "stable" | "sty"
-        | "greenhouse" | "silo" => 5.0,
-        // Religious — low footprint count but tall single-volume
-        "church" | "chapel" | "cathedral" | "mosque" | "temple" | "synagogue"
-        | "shrine" | "religious" | "monastery" => 12.0,
-        // Sport
-        "stadium" | "sports_hall" | "sports_centre" | "grandstand" => 15.0,
-        // Transport
-        "train_station" | "bus_station" | "terminal" | "transportation" => 12.0,
-        _ => return None,
-    })
-}
-
-/// Representative height by Overture `subtype` enum (the coarser, 13-value
-/// classification that's more often populated than `class`).
-fn subtype_default_height(subtype: &str) -> Option<f64> {
-    Some(match subtype {
-        "residential" => 8.0,
-        "commercial" => 15.0,
-        "industrial" => 10.0,
-        "agricultural" | "outbuilding" | "service" => 5.0,
-        "civic" | "education" | "entertainment" | "religious" => 12.0,
-        "medical" => 18.0,
-        "military" | "transportation" => 8.0,
-        _ => return None,
-    })
-}
-
-/// Final-resort height from footprint area, refined by neighbourhood
-/// density. The density boost solves the central-Tokyo "pencil
-/// building" problem: 50–200 m² lots in Marunouchi are typically
-/// 5–10 floors of mixed-use, not 6 m sheds.
-fn footprint_default_height(area_m2: f32, urban: UrbanLevel) -> f64 {
-    use UrbanLevel::*;
-    match urban {
-        DenseUrban => {
-            if area_m2 < 60.0 {
-                12.0 // 4 floors — even tiny lots get pencil-building treatment
-            } else if area_m2 < 200.0 {
-                15.0 // 5 floors
-            } else if area_m2 < 800.0 {
-                18.0 // 6 floors mid-rise
-            } else {
-                15.0 // big-box at street level
-            }
-        }
-        Urban => {
-            if area_m2 < 60.0 {
-                9.0 // 3 floors — minimum requested for "dense" areas
-            } else if area_m2 < 200.0 {
-                9.0
-            } else if area_m2 < 800.0 {
-                12.0
-            } else {
-                12.0
-            }
-        }
-        Suburban => {
-            if area_m2 < 60.0 {
-                6.0
-            } else if area_m2 < 200.0 {
-                6.0
-            } else if area_m2 < 800.0 {
-                9.0
-            } else {
-                10.0
-            }
-        }
-        Rural => {
-            if area_m2 < 60.0 {
-                4.0
-            } else if area_m2 < 200.0 {
-                6.0
-            } else if area_m2 < 800.0 {
-                9.0
-            } else {
-                10.0
-            }
-        }
-    }
 }
 
 /// One clipped polygon belonging to some (possibly multi-fragment) building.
@@ -305,6 +205,7 @@ pub fn build_mesh(
     filter: AreaFilter,
     aabb_only: bool,
     terrain: Option<&TerrainTile>,
+    height_config: &HeightConfig,
 ) -> Mesh {
     let anchor = coord::tile_center(out_z, out_x, out_y);
 
@@ -314,7 +215,7 @@ pub fn build_mesh(
     let total_buildings: usize = sources.iter().map(|s| s.tile.buildings.len()).sum();
     let avg_per_source =
         total_buildings as f32 / (sources.len().max(1) as f32);
-    let urban = classify_urban(avg_per_source);
+    let urban = classify_urban(avg_per_source, height_config);
 
     // ---- 1. collect all fragments, grouping by feature id ----
     let mut by_id: HashMap<u64, usize> = HashMap::new();
@@ -351,7 +252,7 @@ pub fn build_mesh(
                             let idx = pending.len();
                             by_id.insert(fid, idx);
                             pending.push(PendingFeature {
-                                props: feature_props(feat, area, urban),
+                                props: feature_props(feat, area, urban, height_config),
                                 total_area_m2: area,
                                 fragments: vec![fragment],
                                 centroid_lon_weighted: 0.0,
@@ -366,7 +267,7 @@ pub fn build_mesh(
                         // feature counts as its own building.
                         let idx = pending.len();
                         pending.push(PendingFeature {
-                            props: feature_props(feat, area, urban),
+                            props: feature_props(feat, area, urban, height_config),
                             total_area_m2: area,
                             fragments: vec![fragment],
                             centroid_lon_weighted: 0.0,
@@ -446,8 +347,13 @@ pub fn build_mesh(
     }
 }
 
-fn feature_props(feat: &BuildingFeature, area_m2: f32, urban: UrbanLevel) -> FeatureProps {
-    let (height_m, height_method) = default_height_meters(feat, area_m2, urban);
+fn feature_props(
+    feat: &BuildingFeature,
+    area_m2: f32,
+    urban: UrbanLevel,
+    cfg: &HeightConfig,
+) -> FeatureProps {
+    let (height_m, height_method) = default_height_meters(feat, area_m2, urban, cfg);
     let source_height_m = feat
         .height
         .filter(|h| *h > 0.0)

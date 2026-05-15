@@ -6,8 +6,12 @@ use bytes::Bytes;
 
 pub mod coord;
 pub mod glb;
+pub mod height_config;
 pub mod mesh;
 
+pub use height_config::{
+    FootprintBucket, FootprintCurve, FootprintTable, HeightConfig, UrbanThresholds,
+};
 pub use mesh::AreaFilter;
 
 #[derive(Debug, thiserror::Error)]
@@ -80,6 +84,7 @@ pub fn render_glb_lod(
         None => None,
     };
 
+    let height_config = HeightConfig::default();
     let mut mesh = mesh::build_mesh(
         out_z,
         out_x,
@@ -88,6 +93,7 @@ pub fn render_glb_lod(
         filter,
         aabb_only,
         terrain_tile.as_ref(),
+        &height_config,
     );
 
     if simplify_ratio > 0.0 && simplify_ratio < 1.0 {
