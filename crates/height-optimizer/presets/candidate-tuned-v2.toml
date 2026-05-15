@@ -1,0 +1,142 @@
+# Candidate C: cross-city tuned (v2).
+#
+# Drives:
+#   - chiyoda density bias was -8.6m  (CBD too low)
+#   - tsukuba density bias was +6.3m  (suburb too high)
+#   - iiyama  density bias was +7.8m  (small town misclassified as suburban)
+#
+# Levers (all configurable via TOML — no code changes):
+#   1. meters_per_floor 3.0 → 3.3 (commercial floors compromise)
+#   2. urban_thresholds.suburban_min 200 → 500 — small mountain towns
+#      with ~200-500 buildings per source tile become Rural, dropping
+#      from Suburban's 6-9-10 m table to Rural's 4-6-9-10.
+#   3. footprint.dense_urban: bump every bucket so Chiyoda CBD towers
+#      get a more realistic floor-area-derived height.
+#   4. footprint.suburban: trim the 800+ m² catch-all from 10 → 8.
+#   5. class.office / commercial / hotel bumped for CBD; retail kept
+#      low; everything residential left alone.
+
+meters_per_floor = 3.3
+
+[urban_thresholds]
+dense_urban_min = 1500.0
+urban_min = 800.0
+suburban_min = 500.0   # ← 200 → 500
+
+[class_height_m]
+hotel = 35.0
+service = 3.0
+bus_station = 12.0
+public = 12.0
+silo = 5.0
+sports_centre = 15.0
+supermarket = 6.0
+college = 12.0
+commercial = 35.0
+farm = 5.0
+sports_hall = 15.0
+barn = 5.0
+shrine = 12.0
+apartments = 25.0
+detached = 6.0
+office = 50.0
+grandstand = 15.0
+train_station = 12.0
+container = 3.0
+clinic = 18.0
+static_caravan = 6.0
+school = 12.0
+sty = 5.0
+industrial = 10.0
+mosque = 12.0
+library = 12.0
+residential = 25.0
+cowshed = 5.0
+farm_auxiliary = 5.0
+tent = 3.0
+carport = 4.0
+dormitory = 25.0
+church = 12.0
+terminal = 12.0
+transportation = 12.0
+religious = 12.0
+cabin = 3.0
+parking = 4.0
+museum = 12.0
+terrace = 6.0
+university = 12.0
+chapel = 12.0
+cathedral = 12.0
+temple = 12.0
+retail = 6.0
+stadium = 15.0
+government = 12.0
+hospital = 18.0
+manufacture = 10.0
+warehouse = 10.0
+synagogue = 12.0
+factory = 10.0
+shop = 6.0
+greenhouse = 5.0
+hut = 3.0
+bungalow = 6.0
+houseboat = 6.0
+civic = 12.0
+mall = 6.0
+shed = 3.0
+garage = 4.0
+garages = 4.0
+kiosk = 6.0
+house = 6.0
+theatre = 12.0
+"semidetached_house" = 6.0
+monastery = 12.0
+kindergarten = 12.0
+stable = 5.0
+
+[subtype_height_m]
+agricultural = 5.0
+service = 5.0
+medical = 18.0
+commercial = 15.0
+civic = 12.0
+education = 12.0
+military = 8.0
+outbuilding = 5.0
+religious = 12.0
+residential = 8.0
+transportation = 8.0
+entertainment = 12.0
+industrial = 10.0
+
+[footprint.dense_urban]
+buckets = [
+  { max_area_m2 = 60.0, height_m = 15.0 },   # was 12
+  { max_area_m2 = 200.0, height_m = 21.0 },  # was 15
+  { max_area_m2 = 800.0, height_m = 24.0 },  # was 18
+  { max_area_m2 = 1000000000.0, height_m = 21.0 },  # was 15
+]
+
+[footprint.urban]
+buckets = [
+  { max_area_m2 = 60.0, height_m = 9.0 },
+  { max_area_m2 = 200.0, height_m = 9.0 },
+  { max_area_m2 = 800.0, height_m = 12.0 },
+  { max_area_m2 = 1000000000.0, height_m = 12.0 },
+]
+
+[footprint.suburban]
+buckets = [
+  { max_area_m2 = 60.0, height_m = 6.0 },
+  { max_area_m2 = 200.0, height_m = 6.0 },
+  { max_area_m2 = 800.0, height_m = 8.0 },   # was 9
+  { max_area_m2 = 1000000000.0, height_m = 8.0 }, # was 10
+]
+
+[footprint.rural]
+buckets = [
+  { max_area_m2 = 60.0, height_m = 4.0 },
+  { max_area_m2 = 200.0, height_m = 6.0 },
+  { max_area_m2 = 800.0, height_m = 8.0 },   # was 9
+  { max_area_m2 = 1000000000.0, height_m = 8.0 }, # was 10
+]

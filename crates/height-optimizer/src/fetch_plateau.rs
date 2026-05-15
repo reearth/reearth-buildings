@@ -40,9 +40,24 @@ pub struct Building {
 
 pub fn fetch_lod1(city_code: &str, bbox: &BBox, cache: &Path) -> Result<Vec<Building>> {
     std::fs::create_dir_all(cache).ok();
-    let bldg_urls = list_bldg_gml_urls(city_code, cache)
+    let all_urls = list_bldg_gml_urls(city_code, cache)
         .with_context(|| format!("list bldg gml for city {city_code}"))?;
-    eprintln!("city {city_code}: {} bldg gml files", bldg_urls.len());
+    // Pre-filter by Japanese standard mesh code → bbox so we skip
+    // gml files that don't even touch our area. The catalog returns
+    // every file in the city's mesh footprint, which for Setagaya
+    // (78 files) or Tsukuba (315 files) would otherwise mean
+    // hundreds of pointless feature-list calls.
+    let bldg_urls: Vec<String> = all_urls
+        .into_iter()
+        .filter(|u| match mesh_bbox_from_url(u) {
+            Some(mb) => mb.intersects(bbox),
+            None => true, // unknown filename shape — keep, don't drop
+        })
+        .collect();
+    eprintln!(
+        "city {city_code}: {} bldg gml files (after mesh-bbox prefilter)",
+        bldg_urls.len()
+    );
 
     let done = AtomicUsize::new(0);
     let total = bldg_urls.len();
@@ -185,14 +200,38 @@ fn fetch_with_cache(url: &str, cache: &Path, ext: &str) -> Result<Vec<u8>> {
     if let Ok(bytes) = std::fs::read(&path) {
         return Ok(bytes);
     }
-    let resp = ureq::get(url)
-        .timeout(std::time::Duration::from_secs(120))
-        .call()
-        .with_context(|| format!("GET {}", short_url(url)))?;
-    let mut bytes: Vec<u8> = Vec::new();
-    resp.into_reader().read_to_end(&mut bytes)?;
-    std::fs::write(&path, &bytes).ok();
-    Ok(bytes)
+    // Retry transient network errors. PLATEAU's attributes endpoint
+    // occasionally times out under load; a second attempt 2s later
+    // almost always succeeds.
+    const MAX_ATTEMPTS: u32 = 4;
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 0..MAX_ATTEMPTS {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(
+                500u64 * (1u64 << attempt),
+            ));
+        }
+        match ureq::get(url)
+            .timeout(std::time::Duration::from_secs(180))
+            .call()
+        {
+            Ok(resp) => {
+                let mut bytes: Vec<u8> = Vec::new();
+                if let Err(e) = resp.into_reader().read_to_end(&mut bytes) {
+                    last_err = Some(anyhow::anyhow!("read body: {e}"));
+                    continue;
+                }
+                std::fs::write(&path, &bytes).ok();
+                return Ok(bytes);
+            }
+            Err(e) => {
+                last_err = Some(anyhow::Error::new(e));
+            }
+        }
+    }
+    Err(last_err
+        .unwrap_or_else(|| anyhow!("unknown fetch error"))
+        .context(format!("GET {}", short_url(url))))
 }
 
 fn urlencode(s: &str) -> String {
@@ -207,6 +246,34 @@ fn urlencode(s: &str) -> String {
         }
     }
     out
+}
+
+/// Japanese standard 3rd-order mesh code → degree-space bbox.
+/// `xxxxxxxx` = first-order(4) + second-order(2) + third-order(2).
+/// 3rd-order mesh is ~1 km square (30" lat × 45" lon).
+fn mesh_to_bbox(code: &str) -> Option<BBox> {
+    if code.len() < 8 || !code.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let p1: f64 = code[0..2].parse().ok()?;
+    let p2: f64 = code[2..4].parse().ok()?;
+    let s1: f64 = code[4..5].parse().ok()?;
+    let s2: f64 = code[5..6].parse().ok()?;
+    let t1: f64 = code[6..7].parse().ok()?;
+    let t2: f64 = code[7..8].parse().ok()?;
+    let lat0 = p1 / 1.5 + s1 * (5.0 / 60.0) + t1 * (30.0 / 3600.0);
+    let lon0 = p2 + 100.0 + s2 * (7.5 / 60.0) + t2 * (45.0 / 3600.0);
+    let dlat = 30.0 / 3600.0;
+    let dlon = 45.0 / 3600.0;
+    Some(BBox::new(lon0, lat0, lon0 + dlon, lat0 + dlat))
+}
+
+/// Extract the mesh code from a PLATEAU bldg gml URL.
+/// `.../udx/bldg/53394509_bldg_6697_op.gml` → `Some("53394509")`.
+fn mesh_bbox_from_url(url: &str) -> Option<BBox> {
+    let last = url.rsplit('/').next()?;
+    let code = last.split('_').next()?;
+    mesh_to_bbox(code)
 }
 
 fn short_url(url: &str) -> String {

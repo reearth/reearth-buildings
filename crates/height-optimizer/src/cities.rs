@@ -33,7 +33,9 @@ pub fn all() -> &'static [City] {
         },
         City {
             name: "nishi-yokohama",
-            city_code: "14103",
+            // PLATEAU serves Yokohama at the parent city code (14100),
+            // not per-ward (14103 etc).
+            city_code: "14100",
             // Minato Mirai — tower apartments + waterfront warehouses.
             bbox: BBox { west: 139.625, south: 35.450, east: 139.640, north: 35.465 },
             note: "tower apartments + warehouses",
@@ -46,11 +48,13 @@ pub fn all() -> &'static [City] {
             note: "planned low/mid-rise + research",
         },
         City {
-            name: "takayama",
-            city_code: "21203",
-            // Takayama old town — traditional wooden + sparse rural.
-            bbox: BBox { west: 137.250, south: 36.135, east: 137.265, north: 36.150 },
-            note: "traditional wooden + rural",
+            // 飯山市 (Iiyama, Nagano). PLATEAU has no Takayama; Iiyama
+            // covers the same "small mountain town + rural mix" niche.
+            name: "iiyama",
+            city_code: "20213",
+            // Iiyama Station / castle area — low-rise townscape.
+            bbox: BBox { west: 138.360, south: 36.845, east: 138.380, north: 36.860 },
+            note: "small mountain town, low-rise",
         },
     ]
 }
