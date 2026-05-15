@@ -4,35 +4,129 @@
 <meta charset="utf-8" />
 <title>Re:Earth Buildings — viewer</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.141/Build/Cesium/Widgets/widgets.css" />
 <style>
   html, body, #app { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
+  /* Palette: Inverted Blueprint
+     Base    #f2efe8 (paper ivory)
+     Assort  #2a3f55 (slate blue)
+     Accent  #c95f3d (terracotta) */
   .overlay {
-    position: absolute; background: rgba(20, 22, 28, 0.92); color: #fff;
+    position: absolute; background: rgba(242, 239, 232, 0.94); color: #2a3f55;
     padding: 10px 12px; border-radius: 8px;
     font: 12px/1.45 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    box-shadow: 0 4px 20px rgba(42, 63, 85, 0.18);
+    box-sizing: border-box;
   }
   /* Cesium's credit display sits along the very bottom; lift the
      status panel above it so the two don't collide. */
   #status { bottom: 36px; left: 12px; max-width: 360px; }
-  #status .row { margin-top: 2px; color: #cfd6e0; }
-  #status .err { color: #ff8e8e; }
+  #status .row { margin-top: 2px; color: #5a6b7d; }
+  #status .err { color: #c95f3d; }
   #status .pill { display: inline-block; min-width: 30px; padding: 1px 6px; margin-right: 6px;
-                  background: #2a2f3a; border-radius: 99px; text-align: center; }
-  #toggle { top: 12px; left: 12px; display: flex; gap: 6px; align-items: center; }
+                  background: #2a3f55; color: #f2efe8; border-radius: 99px; text-align: center; }
+  #toggle { top: 12px; left: 12px; display: flex; gap: 8px 6px; align-items: center;
+            flex-wrap: wrap; max-width: calc(100vw - 24px); }
   #toggle .title { font-size: 13px; font-weight: 600; letter-spacing: 0.2px; margin-right: 8px; }
-  #toggle .title a { color: #fff; text-decoration: none; }
+  #toggle .title a { color: #2a3f55; text-decoration: none; }
   #toggle .title a:hover { text-decoration: underline; }
-  #toggle button {
-    background: #2a2f3a; color: #fff; border: 1px solid #404652;
+  #toggle button,
+  #btn-get-started {
+    background: #fff; color: #2a3f55; border: 1px solid #d8d2c4;
     padding: 5px 10px; border-radius: 6px; font: inherit; cursor: pointer;
   }
-  #toggle button.active { background: #3a82e0; border-color: #3a82e0; }
+  #toggle button:hover { border-color: #2a3f55; }
+  #toggle button.active { background: #2a3f55; color: #f2efe8; border-color: #2a3f55; }
   #toggle button[disabled] { opacity: 0.5; cursor: not-allowed; }
-  #toggle .note { color: #8b95a4; font-size: 11px; }
-  #toggle .sep { color: #404652; }
-  #toggle .label { color: #8b95a4; font-size: 11px; margin: 0 4px 0 4px; }
+  #toggle .note { color: #7c8794; font-size: 11px; }
+  #toggle .sep { color: #c8c0b0; }
+  #toggle .label { color: #7c8794; font-size: 11px; margin: 0 4px 0 4px; }
+  #toggle #btn-get-started {
+    background: #c95f3d; border-color: #c95f3d; color: #fff;
+    font-weight: 700; letter-spacing: 0.3px;
+    box-shadow: 0 2px 12px rgba(201, 95, 61, 0.4);
+  }
+  #toggle #btn-get-started:hover {
+    background: #b8502f; border-color: #b8502f;
+    box-shadow: 0 2px 16px rgba(201, 95, 61, 0.55);
+  }
+
+  /* Bottom-right credit. Lifted above Cesium's inline credit bar
+     (which lives at the very bottom centre-ish) so the two don't
+     overlap on narrow viewports. */
+  #credit {
+    position: absolute; right: 8px; bottom: 32px;
+    font: 11px/1.4 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    color: #2a3f55;
+    background: rgba(242, 239, 232, 0.85); padding: 4px 8px; border-radius: 6px;
+    pointer-events: auto;
+  }
+  #credit a { color: #2a3f55; text-decoration: none; }
+  #credit a:hover { color: #c95f3d; text-decoration: underline; }
+  #credit .gh { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; }
+  #credit svg { width: 14px; height: 14px; vertical-align: -2px; }
+
+  /* Modal */
+  #modal-backdrop {
+    position: fixed; inset: 0; background: rgba(42, 63, 85, 0.55);
+    display: none; align-items: center; justify-content: center; z-index: 1000;
+    padding: 16px;
+  }
+  #modal-backdrop.open { display: flex; }
+  #modal {
+    background: #f2efe8; color: #2a3f55; border-radius: 12px;
+    max-width: 640px; width: 100%; max-height: calc(100vh - 32px);
+    overflow-y: auto; box-shadow: 0 10px 40px rgba(42, 63, 85, 0.35);
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  }
+  #modal header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px; border-bottom: 1px solid #d8d2c4;
+    position: sticky; top: 0; background: #f2efe8; z-index: 1;
+  }
+  #modal h2 { margin: 0; font-size: 16px; }
+  #modal-close {
+    background: transparent; border: none; color: #7c8794;
+    font-size: 22px; line-height: 1; cursor: pointer; padding: 4px 8px;
+  }
+  #modal-close:hover { color: #2a3f55; }
+  #modal .body { padding: 16px 20px 20px; }
+  #modal p { margin: 0 0 12px; color: #4a5568; }
+  #modal h3 { margin: 18px 0 6px; font-size: 13px; color: #c95f3d;
+              text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+  #modal h3:first-child { margin-top: 0; }
+  .codeblock { position: relative; }
+  .codeblock pre {
+    background: #2a3f55; color: #f2efe8; border: 1px solid #2a3f55;
+    border-radius: 6px; padding: 10px 12px; margin: 0;
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    overflow-x: auto; white-space: pre;
+  }
+  .codeblock pre a { color: #ffb380; text-decoration: underline; }
+  .codeblock pre a:hover { color: #ffd0a8; }
+  .codeblock .copy {
+    position: absolute; top: 6px; right: 6px;
+    background: #f2efe8; color: #2a3f55; border: 1px solid #d8d2c4;
+    border-radius: 5px; font: 11px/1 inherit; padding: 5px 8px; cursor: pointer;
+  }
+  .codeblock .copy:hover { background: #c95f3d; border-color: #c95f3d; color: #fff; }
+  .codeblock .copy.copied { background: #c95f3d; border-color: #c95f3d; color: #fff; }
+  #modal .ref { color: #7c8794; font-size: 12px; }
+  #modal .ref a { color: #c95f3d; }
+
+  @media (max-width: 640px) {
+    #toggle { gap: 6px 4px; padding: 8px 10px; font-size: 12px; }
+    #toggle .title { margin-right: 4px; flex-basis: 100%; margin-bottom: 4px; }
+    #toggle .sep { display: none; }
+    #toggle button, #btn-get-started { padding: 6px 9px; font-size: 12px; }
+    #status { max-width: calc(100vw - 24px); font-size: 11px; }
+    #credit { font-size: 10px; right: 4px; bottom: 30px; }
+    #modal header { padding: 12px 14px; }
+    #modal .body { padding: 12px 14px 16px; }
+    .codeblock pre { font-size: 11px; padding: 32px 10px 10px; }
+    .codeblock .copy { top: 4px; right: 4px; }
+  }
 </style>
 </head>
 <body>
@@ -51,7 +145,90 @@
   <button id="btn-terrain-re" class="active" type="button">Re:Earth</button>
   <button id="btn-terrain-cwt" type="button">Cesium</button>
   <button id="btn-terrain-off" type="button">off</button>
+  <span class="sep">|</span>
+  <button id="btn-get-started" type="button">Get Started</button>
   <span class="note" id="toggle-note"></span>
+</div>
+<div id="credit">
+  <a class="gh" href="https://github.com/eukarya-inc/reearth-buildings" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository">
+    <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+    GitHub
+  </a>
+  <span>© Re:Earth and contributors</span>
+</div>
+<div id="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div id="modal">
+    <header>
+      <h2 id="modal-title">Get started with Re:Earth Buildings</h2>
+      <button id="modal-close" type="button" aria-label="Close">×</button>
+    </header>
+    <div class="body">
+      <p>
+        Re:Earth Buildings is an open 3D building tile service built from
+        Overture Maps and Re:Earth Terrain. Just point any 3D Tiles 1.1
+        compatible client (such as Cesium) at the URL below to use it.
+      </p>
+
+      <h3>3D Tiles URL</h3>
+      <div class="codeblock">
+        <pre id="code-url">https://buildings.reearth.land/tileset.json</pre>
+        <button class="copy" data-target="code-url" type="button">Copy</button>
+      </div>
+
+      <h3>Sample code (Cesium)</h3>
+      <div class="codeblock">
+        <pre id="code-sample">import * as Cesium from "cesium";
+
+const viewer = new Cesium.Viewer("app");
+
+const buildings = await Cesium.Cesium3DTileset.fromUrl(
+  "https://buildings.reearth.land/tileset.json",
+);
+viewer.scene.primitives.add(buildings);
+
+// Recommended: pair with Re:Earth Terrain so building footprints sit cleanly on the ground.
+viewer.scene.setTerrain(
+  new Cesium.Terrain(
+    Cesium.CesiumTerrainProvider.fromUrl(
+      "https://terrain.reearth.land/cesium-mesh/ellipsoid",
+      { requestVertexNormals: true },
+    ),
+  ),
+);</pre>
+        <button class="copy" data-target="code-sample" type="button">Copy</button>
+      </div>
+
+      <h3>Attribution (required)</h3>
+      <p>
+        ODbL 1.0 requires you to display the attribution below somewhere
+        when the data is shown. Most clients (including Cesium) surface
+        <code>asset.copyright</code> from <code>tileset.json</code>
+        automatically; if yours doesn't, add it to your credits manually.
+      </p>
+      <div class="codeblock">
+        <pre id="code-attr" data-copy-text="Buildings: Re:Earth Buildings (https://buildings.reearth.land/), OpenStreetMap contributors (https://www.openstreetmap.org/copyright), Overture Maps Foundation (https://overturemaps.org/) (ODbL).
+Terrain: Re:Earth Terrain (https://terrain.reearth.land/), Mapterhorn (https://mapterhorn.com/).">Buildings: <a href="https://buildings.reearth.land/" target="_blank" rel="noopener noreferrer">Re:Earth Buildings</a>, <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a>, <a href="https://overturemaps.org/" target="_blank" rel="noopener noreferrer">Overture Maps Foundation</a> (ODbL).
+Terrain: <a href="https://terrain.reearth.land/" target="_blank" rel="noopener noreferrer">Re:Earth Terrain</a>, <a href="https://mapterhorn.com/" target="_blank" rel="noopener noreferrer">Mapterhorn</a>.</pre>
+        <button class="copy" data-target="code-attr" type="button">Copy</button>
+      </div>
+
+      <p class="ref" style="margin-top: 16px;">
+        Operated by <a href="https://eukarya.io/" target="_blank" rel="noopener noreferrer">Eukarya Inc.</a>
+        as part of the <a href="https://reearth.io/" target="_blank" rel="noopener noreferrer">Re:Earth</a> ecosystem.
+      </p>
+
+      <p class="ref">
+        Note: this is a best-effort community service with no SLA or uptime
+        guarantee. Use at your own risk, and please don't rely on it for
+        production traffic without hosting your own mirror.
+      </p>
+
+      <p class="ref">
+        For the full spec, attribute schema, and license details, see the
+        <a href="https://github.com/eukarya-inc/reearth-buildings#readme" target="_blank" rel="noopener noreferrer">README</a>.
+      </p>
+    </div>
+  </div>
 </div>
 <script type="module">
   import * as Cesium from "https://cdn.jsdelivr.net/npm/cesium@1.141/Build/Cesium/index.js";
@@ -314,6 +491,45 @@
   // EXT_structural_metadata path produces the same getProperty()
   // surface as the older b3dm batch table, so the InfoBox renders
   // them automatically for both ours and the Cesium OSM tileset.
+
+  // ----- Get-started modal -----
+  const modal = document.getElementById("modal-backdrop");
+  const btnGetStarted = document.getElementById("btn-get-started");
+  const btnClose = document.getElementById("modal-close");
+  const openModal = () => { modal.classList.add("open"); };
+  const closeModal = () => { modal.classList.remove("open"); };
+  btnGetStarted.addEventListener("click", openModal);
+  btnClose.addEventListener("click", closeModal);
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && modal.classList.contains("open")) closeModal();
+  });
+
+  for (const btn of document.querySelectorAll(".codeblock .copy")) {
+    btn.addEventListener("click", async () => {
+      const target = document.getElementById(btn.dataset.target);
+      const text = target?.dataset.copyText ?? target?.textContent ?? "";
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        // Clipboard API can fail on insecure origins; fall back to a
+        // hidden textarea selection so the button still works.
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); } finally { ta.remove(); }
+      }
+      const original = btn.textContent;
+      btn.textContent = "Copied";
+      btn.classList.add("copied");
+      setTimeout(() => {
+        btn.textContent = original;
+        btn.classList.remove("copied");
+      }, 1500);
+    });
+  }
 </script>
 </body>
 </html>
