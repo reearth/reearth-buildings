@@ -2,9 +2,30 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Re:Earth Buildings — viewer</title>
+<title>Re:Earth Buildings — open 3D building tiles for the world</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+<meta name="description" content="Re:Earth Buildings is an open, global 3D building tileset built from Overture Maps and Re:Earth Terrain. Drop the tileset.json URL into Cesium or any 3D Tiles 1.1 client. Free under ODbL." />
+<meta name="theme-color" content="#c95f3d" />
+
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Re:Earth Buildings" />
+<meta property="og:title" content="Re:Earth Buildings — open 3D building tiles for the world" />
+<meta property="og:description" content="Open, global 3D building tiles built from Overture Maps and Re:Earth Terrain. Just point Cesium (or any 3D Tiles 1.1 client) at the tileset URL. Free under ODbL." />
+<meta property="og:url" content="https://buildings.reearth.land/" />
+<meta property="og:image" content="https://buildings.reearth.land/og.png" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content="Re:Earth Buildings — 3D city view with shadowed building footprints over an aerial basemap" />
+<meta property="og:locale" content="en_US" />
+
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Re:Earth Buildings — open 3D building tiles for the world" />
+<meta name="twitter:description" content="Open, global 3D building tiles built from Overture Maps and Re:Earth Terrain. Drop into Cesium or any 3D Tiles 1.1 client. Free under ODbL." />
+<meta name="twitter:image" content="https://buildings.reearth.land/og.png" />
+<meta name="twitter:image:alt" content="Re:Earth Buildings — 3D city view with shadowed building footprints over an aerial basemap" />
+
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.141/Build/Cesium/Widgets/widgets.css" />
 <style>
   html, body, #app { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
@@ -297,11 +318,59 @@ Terrain: <a href="https://terrain.reearth.land/" target="_blank" rel="noopener n
   viewer.scene.globe.shadows = Cesium.ShadowMode.RECEIVE_ONLY;
   // Soft shadow filtering — single-tap point-source shadows look harsh.
   viewer.shadowMap.softShadows = true;
-  viewer.shadowMap.size = 2048;
-  // Pin a daytime clock so shadows are visible regardless of when the
-  // page loads (without this, midnight UTC looks completely lit by
-  // the moon term and there are no useful shadows).
-  viewer.clock.currentTime = Cesium.JulianDate.fromIso8601("2024-06-21T03:00:00Z");
+  // 4096² shadow map — 2048 left visible "shadow acne" stripes on tall
+  // building façades when the sun grazes them at the autumn-morning
+  // angle. The extra resolution gives shadow texels enough room that
+  // self-shadowing on near-grazing surfaces doesn't quantise into bands.
+  viewer.shadowMap.size = 4096;
+  // Bias tuning to suppress remaining acne on vertical surfaces lit at
+  // low angles. normalShadingSmooth makes the surface fade into shadow
+  // a bit before the lit/unlit transition would otherwise alias.
+  // Cesium doesn't expose the bias struct publicly, so we poke at the
+  // underscore field — fragile across major versions but stable enough
+  // within the 1.x series we pin.
+  const bias = viewer.shadowMap._primitiveBias;
+  if (bias) {
+    bias.normalShadingSmooth = 0.4;
+    bias.normalOffsetScale = 1.0;
+  }
+  // 4× MSAA on the main scene buffer — kills the jaggies along roof
+  // edges and tile seams without the perceptual blur FXAA introduces.
+  viewer.scene.msaaSamples = 4;
+  // Screen-space ambient occlusion — adds the contact darkening between
+  // adjacent buildings / building base ↔ ground that PBR alone can't
+  // recover. Tuned conservatively so it doesn't bruise wide façades.
+  const ao = viewer.scene.postProcessStages.ambientOcclusion;
+  ao.enabled = true;
+  ao.uniforms.intensity = 2.0;
+  ao.uniforms.bias = 0.1;
+  ao.uniforms.lengthCap = 0.4;
+  ao.uniforms.stepSize = 2.0;
+  ao.uniforms.blurStepSize = 0.86;
+  // Diffuse IBL via spherical harmonics. The L1 gradient encodes a
+  // two-tone "sky-up / OSM-bounce-down" environment: cool blue sky on
+  // top, warm cream bounce from the OSM basemap below. So the side of
+  // a building facing the ground picks up a subtle warm fill instead
+  // of flat grey, mirroring what a real city looks like in soft light.
+  // L00 sits a touch warm overall — OSM is a light beige that lifts
+  // ambient temperature even on overcast moments. Tweakable; full HDR
+  // env maps would be slotted in via specularEnvironmentMaps if we
+  // ever want true reflections.
+  const sh = [
+    new Cesium.Cartesian3( 0.42,  0.44,  0.48),  // L00  — dim ambient (avoid washout)
+    new Cesium.Cartesian3(-0.06, -0.06, -0.05),  // L1-1
+    new Cesium.Cartesian3(-0.06,  0.04,  0.30),  // L10  — strong blue sky ↑ / warm bounce ↓
+    new Cesium.Cartesian3(-0.02, -0.02, -0.02),  // L11
+    new Cesium.Cartesian3( 0.00,  0.00,  0.00),  // L2-2
+    new Cesium.Cartesian3( 0.00,  0.00,  0.00),  // L2-1
+    new Cesium.Cartesian3(-0.03, -0.03, -0.03),  // L20
+    new Cesium.Cartesian3( 0.00,  0.00,  0.00),  // L21
+    new Cesium.Cartesian3( 0.00,  0.00,  0.00),  // L22
+  ];
+  // Pin the sun at 10:00 JST on an autumn morning — low enough that
+  // buildings cast long, directional shadows for OG screenshots, and
+  // independent of when the page is actually loaded.
+  viewer.clock.currentTime = Cesium.JulianDate.fromIso8601("2024-11-01T01:00:00Z");
 
   viewer.camera.setView({
     destination: Cesium.Cartesian3.fromDegrees(lon, lat, height),
@@ -328,6 +397,9 @@ Terrain: <a href="https://terrain.reearth.land/" target="_blank" rel="noopener n
     showCreditsOnScreen: true,
   });
   tileset.shadows = Cesium.ShadowMode.ENABLED;
+  tileset.imageBasedLighting = new Cesium.ImageBasedLighting({
+    sphericalHarmonicCoefficients: sh,
+  });
   viewer.scene.primitives.add(tileset);
   // Re-add tileset.json's asset.copyright into the "Data attribution"
   // lightbox only (showOnScreen=false). Cesium's tileset path tends to
