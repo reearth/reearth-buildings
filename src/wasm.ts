@@ -1,11 +1,9 @@
-// Wrangler imports `.wasm` files as a compiled `WebAssembly.Module`. We
-// pass that into wasm-bindgen's synchronous `initSync` once at module
-// load and then re-export the typed wrapper.
+// Glue between TypeScript and the wasm-bindgen output. The wasm-pack
+// `--target bundler` glue is patched by scripts/build-wasm.mjs so that
+// the .wasm asset is instantiated against the workerd runtime up-front
+// — no manual `init` call needed here.
 
-import { initSync, render_glb_lod } from "../wasm/buildings_wasm";
-import wasmModule from "../wasm/buildings_wasm_bg.wasm";
-
-initSync({ module: wasmModule });
+import { render_glb_lod } from "./wasm/buildings-wasm/buildings_wasm";
 
 export interface SourceTile {
   mvt: Uint8Array;

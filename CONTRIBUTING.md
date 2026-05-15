@@ -7,7 +7,7 @@ Re:Earth Buildings is a small Cloudflare Workers + Rust→WASM project that turn
 | Layer | Tech |
 |---|---|
 | Runtime | Cloudflare Workers (`workerd`) |
-| Hot path | **Rust → WASM** via `wasm-pack --target web` |
+| Hot path | **Rust → WASM** via `wasm-pack --target bundler` (workerd-patched glue) |
 | HTTP routing | [Hono](https://hono.dev/) |
 | Storage | Cloudflare R2 (cache only — no source data) |
 | Metadata KV | Workers KV (latest Overture release pointer) |
@@ -30,20 +30,28 @@ Re:Earth Buildings is a small Cloudflare Workers + Rust→WASM project that turn
 
 ```
 .
-├── apps/worker/                Cloudflare Worker (TypeScript host)
-│   ├── src/index.ts            Hono app + CORS
-│   ├── src/routes/             tileset.json / glb / viewer
-│   ├── src/pmtiles.ts          Overture PMTiles range-read client
-│   ├── src/terrain.ts          Re:Earth Terrain WebP fetcher
-│   ├── src/version.ts          Overture release auto-discovery
-│   ├── src/lod.ts              LOD policy (zoom buckets, area filters, simplify)
-│   ├── src/wasm.ts             wasm-bindgen wrapper
-│   └── wrangler.toml
+├── package.json                pnpm scripts: dev, build:wasm, deploy, …
+├── wrangler.toml               Worker config (main, [assets], R2/KV bindings)
+├── tsconfig.json
+├── src/                        Cloudflare Worker (TypeScript host)
+│   ├── index.ts                Hono app + CORS
+│   ├── routes/                 tileset.json / glb
+│   ├── pmtiles.ts              Overture PMTiles range-read client
+│   ├── terrain.ts              Re:Earth Terrain WebP fetcher
+│   ├── version.ts              Overture release auto-discovery
+│   ├── lod.ts                  LOD policy (zoom buckets, area filters, simplify)
+│   ├── wasm.ts                 wasm-bindgen wrapper
+│   └── wasm/                   built artifact (gitignored), populated by build:wasm
+├── public/                     static assets served via [assets] binding
+│   └── index.html              bundled Cesium viewer
+├── scripts/
+│   └── build-wasm.mjs          wasm-pack + wasm-opt + workerd-glue patch
 ├── crates/
 │   ├── mvt-decoder/            Minimal MVT decoder (Overture buildings layer)
 │   ├── terrain-decoder/        Mapzen Terrarium WebP decoder + bilinear sampler
 │   ├── buildings-core/         Mesh + glb writer
 │   └── buildings-wasm/         wasm-bindgen entry point
+├── Cargo.toml / Cargo.lock     Rust workspace
 └── README.md                   For dataset users
 ```
 
@@ -51,24 +59,26 @@ Re:Earth Buildings is a small Cloudflare Workers + Rust→WASM project that turn
 
 Prereqs: Rust (stable), `wasm-pack`, `wasm-opt` (Homebrew: `brew install binaryen`), Node 20+, `pnpm`, `wrangler`.
 
+All commands run from the repo root:
+
 ```bash
-cd apps/worker
 pnpm install
 
-# Build the WASM blob (also chained from `pnpm run dev` / `deploy`)
+# Build the WASM blob (also chained from `pnpm run dev` / `deploy`).
+# WASM_PROFILE=dev skips wasm-opt for faster iteration.
 pnpm run build:wasm
 
-# Local dev server (binds R2 + KV locally)
-pnpm run dev    # → http://localhost:8788
+# Local dev server (binds R2 + KV locally via wrangler's simulator).
+pnpm run dev    # → http://localhost:8787
 ```
 
 Useful URLs once `wrangler dev` is up:
 
 | URL | Purpose |
 |---|---|
-| `http://localhost:8788/` | Bundled Cesium viewer (terrain, sun, atmosphere ON) |
-| `http://localhost:8788/tileset.json` | Root 3D Tiles entry point |
-| `http://localhost:8788/v3-add/14/14552/6451.glb` | A specific glb tile (Tokyo Station area) |
+| `http://localhost:8787/` | Bundled Cesium viewer (terrain, sun, atmosphere ON) |
+| `http://localhost:8787/tileset.json` | Root 3D Tiles entry point |
+| `http://localhost:8787/v4-add/14/14552/6451.glb` | A specific glb tile (Tokyo Station area) |
 
 `.dev.vars` can set `CACHE_DISABLED=1` to bypass every cache layer (Cache API + R2 + browser) — useful when iterating on the renderer.
 
@@ -105,7 +115,7 @@ GET /:impl/{z}/{x}/{y}.glb
      → write to R2 in waitUntil; respond
 ```
 
-See `apps/worker/src/routes/glb.ts` and `crates/buildings-core/src/lib.rs`.
+See `src/routes/glb.ts` and `crates/buildings-core/src/lib.rs`.
 
 ## LOD policy
 
@@ -117,7 +127,7 @@ Three content zooms with **size-based bucketing under refine: ADD** — every bu
 | 13 | large buildings | 2 000 – 10 000 m² |
 | 14 | everything smaller | < 2 000 m² (full extrusion) |
 
-Toggle via `LOD_MODE` (`apps/worker/src/lod.ts`); flipping ADD ↔ REPLACE bumps the URL space (it's part of `IMPL_VERSION`).
+Toggle via `LOD_MODE` (`src/lod.ts`); flipping ADD ↔ REPLACE bumps the URL space (it's part of `IMPL_VERSION`).
 
 ## Height resolution cascade
 
@@ -143,7 +153,7 @@ The glb route also serves browser ETags so clients revalidate cheaply across pmt
 
 ### `IMPL_VERSION` (URL prefix)
 
-Bump `RENDERER_VERSION` in `apps/worker/src/version.ts` when the renderer or glb schema changes. The bump invalidates every cached URL atomically (versioned URLs change). Daily-ish Overture release rotations are *not* propagated through `IMPL_VERSION` — instead we hash the contributing MVT bytes for the ETag / R2 cache key, so unchanged tiles stay deduped across releases.
+Bump `RENDERER_VERSION` in `src/version.ts` when the renderer or glb schema changes. The bump invalidates every cached URL atomically (versioned URLs change). Daily-ish Overture release rotations are *not* propagated through `IMPL_VERSION` — instead we hash the contributing MVT bytes for the ETag / R2 cache key, so unchanged tiles stay deduped across releases.
 
 ## Workers constraints to keep in mind
 

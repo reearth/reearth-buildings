@@ -1,0 +1,30 @@
+{
+  "name": "reearth-buildings",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "On-demand 3D Tiles for buildings.reearth.land (TS host + Rust→WASM hot path)",
+  "scripts": {
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "build": "pnpm run build:wasm && wrangler deploy --dry-run --outdir dist",
+    "dev": "pnpm run build:wasm && wrangler dev",
+    "deploy": "pnpm run build:wasm && wrangler deploy",
+    "deploy:staging": "pnpm run build:wasm && wrangler deploy --env staging",
+    "deploy:prod": "pnpm run build:wasm && wrangler deploy --env prod",
+    "cf-typegen": "wrangler types --strict-vars false",
+    "typecheck": "pnpm run cf-typegen && tsc --noEmit",
+    "lint": "biome check src",
+    "format": "biome format --write src"
+  },
+  "dependencies": {
+    "hono": "^4.6.0",
+    "pmtiles": "^4.3.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "meshoptimizer": "^1.1.1",
+    "typescript": "^5.6.0",
+    "wrangler": "^4.0.0"
+  },
+  "packageManager": "pnpm@9.12.0"
+}

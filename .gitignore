@@ -6,8 +6,7 @@ node_modules/
 .pnpm-store/
 
 # wasm-pack output (built artifact)
-apps/worker/wasm/
-apps/worker/out/
+src/wasm/
 dist/
 **/*.rs.bk
 Cargo.lock.bak

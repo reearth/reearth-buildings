@@ -16,7 +16,8 @@
     "skipLibCheck": true,
     "verbatimModuleSyntax": false,
     "allowImportingTsExtensions": false,
+    "allowJs": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "wasm/**/*.d.ts", "worker-configuration.d.ts"]
+  "include": ["src/**/*.ts", "src/**/*.js", "src/wasm/**/*.d.ts", "worker-configuration.d.ts"]
 }
