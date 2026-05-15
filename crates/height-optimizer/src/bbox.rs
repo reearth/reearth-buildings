@@ -25,17 +25,3 @@ impl BBox {
     }
 }
 
-/// Convert a 3D Tiles `boundingVolume.region` array (radians + metres) to
-/// a degree-space [`BBox`]. Returns `None` if the input isn't a 6-element
-/// number array.
-pub fn region_to_bbox(region: &[f64]) -> Option<BBox> {
-    if region.len() < 4 {
-        return None;
-    }
-    Some(BBox {
-        west: region[0].to_degrees(),
-        south: region[1].to_degrees(),
-        east: region[2].to_degrees(),
-        north: region[3].to_degrees(),
-    })
-}

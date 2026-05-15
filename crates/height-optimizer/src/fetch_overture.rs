@@ -17,7 +17,6 @@ const BUCKET: &str = "https://overturemaps-tiles-us-west-2-beta.s3.amazonaws.com
 pub const SOURCE_Z: u8 = 14;
 
 pub struct OvertureSource {
-    pub release: String,
     pub z: u8,
     pub x: u32,
     pub y: u32,
@@ -115,7 +114,6 @@ pub fn fetch_bbox(release: &str, bbox: &BBox, cache: &Path) -> Result<Vec<Overtu
                     Ok::<_, anyhow::Error>(None)
                 } else {
                     Ok(Some(OvertureSource {
-                        release: release.clone(),
                         z: SOURCE_Z,
                         x,
                         y,

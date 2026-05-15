@@ -35,7 +35,6 @@ const WORLD_SID: &str = "0/0/0/0";
 pub struct Building {
     pub centroid: LonLat,
     pub measured_height_m: f32,
-    pub gml_id: String,
 }
 
 pub fn fetch_lod1(city_code: &str, bbox: &BBox, cache: &Path) -> Result<Vec<Building>> {
@@ -112,15 +111,9 @@ fn building_from_record(r: &Value) -> Option<Building> {
     let center = r.get("_bbox").and_then(|b| b.get("center"))?;
     let lng = center.get("lng").and_then(|v| v.as_f64())?;
     let lat = center.get("lat").and_then(|v| v.as_f64())?;
-    let id = r
-        .get("gml:id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
     Some(Building {
         centroid: LonLat { lon_deg: lng, lat_deg: lat },
         measured_height_m: h as f32,
-        gml_id: id,
     })
 }
 
