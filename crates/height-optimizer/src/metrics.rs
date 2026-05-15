@@ -132,14 +132,14 @@ pub fn print_report(name: &str, r: &Report) {
     println!("\nby class (top 10 by n):");
     print_row_header();
     let mut by_class: Vec<_> = r.by_class.iter().collect();
-    by_class.sort_by(|a, b| b.1.n.cmp(&a.1.n));
+    by_class.sort_by_key(|a| std::cmp::Reverse(a.1.n));
     for (k, s) in by_class.iter().take(10) {
         print_row(k, s);
     }
     println!("\nby subtype:");
     print_row_header();
     let mut by_st: Vec<_> = r.by_subtype.iter().collect();
-    by_st.sort_by(|a, b| b.1.n.cmp(&a.1.n));
+    by_st.sort_by_key(|a| std::cmp::Reverse(a.1.n));
     for (k, s) in by_st.iter().take(10) {
         print_row(k, s);
     }

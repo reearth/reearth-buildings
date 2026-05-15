@@ -108,7 +108,7 @@ fn pair_rows_topn<'a>(
     n: usize,
 ) -> Vec<(&'a str, &'a Stats, &'a Stats)> {
     let mut all = pair_rows(base, cand);
-    all.sort_by(|a, b| b.1.n.cmp(&a.1.n));
+    all.sort_by_key(|a| std::cmp::Reverse(a.1.n));
     all.into_iter().take(n).collect()
 }
 
