@@ -36,8 +36,13 @@ const WORLD_REGION = [
   HEIGHT_MAX_M,
 ];
 
+// Cesium's CreditDisplay renders `asset.copyright` as HTML, so anchor
+// tags survive into the on-screen credit bar.
 const COPYRIGHT =
-  "© OpenStreetMap contributors, Overture Maps Foundation (ODbL) · terrain by Re:Earth Terrain (Mapterhorn / EGM2008)";
+  '<a href="https://buildings.reearth.land/" target="_blank" rel="noopener">Re:Earth Buildings</a> — ' +
+  'Buildings © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>, ' +
+  '<a href="https://overturemaps.org/" target="_blank" rel="noopener">Overture Maps Foundation</a> (ODbL) · ' +
+  'Terrain by <a href="https://terrain.reearth.land/" target="_blank" rel="noopener">Re:Earth Terrain</a> (Mapterhorn / EGM2008)';
 
 interface Tile {
   boundingVolume: { region: number[] };

@@ -1,15 +1,4 @@
-import type { Context } from "hono";
-
-// Minimal Cesium viewer for dogfooding. Loads our /tileset.json on top of
-// the OpenStreetMap basemap (no Ion token required). Camera initial state
-// is overridable via query params:
-//   /?lon=139.7&lat=35.68&height=2000&heading=0&pitch=-30
-// Add `?debug=1` to draw tileset bounding volumes and surface tile errors
-// in the status panel.
-//
-// Building click reveals attributes via a tiny side panel.
-
-const HTML = `<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -24,12 +13,17 @@ const HTML = `<!DOCTYPE html>
     font: 12px/1.45 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
     box-shadow: 0 4px 20px rgba(0,0,0,0.3);
   }
-  #status { bottom: 12px; left: 12px; max-width: 360px; }
+  /* Cesium's credit display sits along the very bottom; lift the
+     status panel above it so the two don't collide. */
+  #status { bottom: 36px; left: 12px; max-width: 360px; }
   #status .row { margin-top: 2px; color: #cfd6e0; }
   #status .err { color: #ff8e8e; }
   #status .pill { display: inline-block; min-width: 30px; padding: 1px 6px; margin-right: 6px;
                   background: #2a2f3a; border-radius: 99px; text-align: center; }
   #toggle { top: 12px; left: 12px; display: flex; gap: 6px; align-items: center; }
+  #toggle .title { font-size: 13px; font-weight: 600; letter-spacing: 0.2px; margin-right: 8px; }
+  #toggle .title a { color: #fff; text-decoration: none; }
+  #toggle .title a:hover { text-decoration: underline; }
   #toggle button {
     background: #2a2f3a; color: #fff; border: 1px solid #404652;
     padding: 5px 10px; border-radius: 6px; font: inherit; cursor: pointer;
@@ -49,6 +43,7 @@ const HTML = `<!DOCTYPE html>
   <div class="row" id="last-error"></div>
 </div>
 <div id="toggle" class="overlay">
+  <span class="title"><a href="/">Re:Earth Buildings</a></span>
   <button id="btn-ours" class="active" type="button">ours</button>
   <button id="btn-cesium" type="button">Cesium OSM</button>
   <span class="sep">|</span>
@@ -167,24 +162,28 @@ const HTML = `<!DOCTYPE html>
   const tileset = await Cesium.Cesium3DTileset.fromUrl("/tileset.json", {
     maximumScreenSpaceError: sse,
     debugShowBoundingVolume: debug,
+    // Hint that asset.copyright should also reach the on-screen credit
+    // bar. In practice newer Cesium ignores this for 3D Tilesets and
+    // routes the credit through the lightbox regardless — the
+    // addStaticCredit(false) below is what currently surfaces it. Kept
+    // as a forward-compat hint in case the upstream behaviour changes.
+    showCreditsOnScreen: true,
   });
   tileset.shadows = Cesium.ShadowMode.ENABLED;
   viewer.scene.primitives.add(tileset);
-  // Required ODbL attribution for the OSM-derived buildings + Overture's
-  // ML-augmented additions, plus Re:Earth Terrain for ground placement.
-  // Cesium also auto-adds its own credit and the OSM imagery credit.
-  viewer.creditDisplay.addStaticCredit(
-    new Cesium.Credit(
-      'Buildings © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>, <a href="https://overturemaps.org/" target="_blank" rel="noopener">Overture Maps Foundation</a> (ODbL)',
-      true,
-    ),
-  );
-  viewer.creditDisplay.addStaticCredit(
-    new Cesium.Credit(
-      'Terrain by <a href="https://terrain.reearth.land/" target="_blank" rel="noopener">Re:Earth Terrain</a> (Mapterhorn / EGM2008)',
-      true,
-    ),
-  );
+  // Re-add tileset.json's asset.copyright into the "Data attribution"
+  // lightbox only (showOnScreen=false). Cesium's tileset path tends to
+  // surface the credit briefly during load and then drop it; this keeps
+  // it permanently parked in the modal without cluttering the inline
+  // bar (which already shows Re:Earth Terrain etc.). Worker stays the
+  // single source of truth.
+  fetch("/tileset.json")
+    .then((r) => r.json())
+    .then((t) => {
+      const cp = t?.asset?.copyright;
+      if (cp) viewer.creditDisplay.addStaticCredit(new Cesium.Credit(cp, false));
+    })
+    .catch((err) => console.warn("attribution fetch failed", err));
   // Expose for debugging via DevTools console.
   window.viewer = viewer;
   window.tileset = tileset;
@@ -195,10 +194,15 @@ const HTML = `<!DOCTYPE html>
     loadedEl.textContent = String(loaded);
   });
   tileset.tileFailed.addEventListener((event) => {
-    failed++;
-    failedEl.textContent = String(failed);
     const url = event.url ?? "(unknown)";
     const msg = event.message ?? "(no message)";
+    // 404s are expected — Overture's PMTiles is sparse, so output tiles
+    // covering pure water / wilderness legitimately have no content.
+    // Don't surface them as failures.
+    const is404 = /\b404\b/.test(msg) || /\b404\b/.test(url);
+    if (is404) return;
+    failed++;
+    failedEl.textContent = String(failed);
     lastErrorEl.innerHTML = '<span class="err">' + url + '<br/>' + msg + '</span>';
     console.error("tile failed:", url, msg);
   });
@@ -313,12 +317,3 @@ const HTML = `<!DOCTYPE html>
 </script>
 </body>
 </html>
-`;
-
-export const viewerHtml = (_c: Context) =>
-  new Response(HTML, {
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "public, max-age=300",
-    },
-  });

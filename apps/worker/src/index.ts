@@ -3,7 +3,6 @@ import { cors } from "hono/cors";
 import type { Env } from "./env";
 import { glbTile } from "./routes/glb";
 import { subTilesetJson, tilesetJson } from "./routes/tileset";
-import { viewerHtml } from "./routes/viewer";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -25,7 +24,8 @@ app.use(
   }),
 );
 
-app.get("/", viewerHtml);
+// `/` is served from public/index.html via the [assets] binding in
+// wrangler.toml — no Worker route needed.
 app.get("/healthz", (c) => c.text("ok"));
 
 // Unversioned entry tileset. Skip the edge cache middleware so a deploy

@@ -3,6 +3,12 @@ main = "src/index.ts"
 compatibility_date = "2025-05-01"
 workers_dev = true
 
+# Static assets bound to /. The Cesium viewer (public/index.html) is
+# served directly without invoking the Worker; non-matching paths fall
+# through to the Worker (tileset.json, glb tiles, healthz, …).
+[assets]
+directory = "./public"
+
 # wasm-pack --target bundler emits an ES module wrapper + .wasm asset; wrangler
 # bundles them. Run `pnpm build:wasm` before `wrangler dev` / `deploy` (the
 # package.json scripts chain them automatically).
