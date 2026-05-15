@@ -5,6 +5,7 @@ members = [
     "crates/terrain-decoder",
     "crates/buildings-core",
     "crates/buildings-wasm",
+    "crates/height-optimizer",
 ]
 
 [workspace.package]

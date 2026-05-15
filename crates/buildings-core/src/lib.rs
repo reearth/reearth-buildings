@@ -12,7 +12,7 @@ pub mod mesh;
 pub use height_config::{
     FootprintBucket, FootprintCurve, FootprintTable, HeightConfig, UrbanThresholds,
 };
-pub use mesh::AreaFilter;
+pub use mesh::{AreaFilter, ExtractedBuilding};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

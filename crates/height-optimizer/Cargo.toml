@@ -1,0 +1,33 @@
+[package]
+name = "height-optimizer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Calibrate buildings-core height estimation against PLATEAU LOD1 truth"
+publish = false
+
+[[bin]]
+name = "height-optimizer"
+path = "src/main.rs"
+
+[dependencies]
+buildings-core = { path = "../buildings-core" }
+mvt-decoder = { path = "../mvt-decoder" }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bytes = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+ureq = { version = "2", default-features = false, features = ["tls"] }
+url = "2"
+geo = "0.29"
+rstar = "0.12"
+pmtiles = { version = "0.23", default-features = false, features = ["http-async", "reqwest-rustls", "reqwest-webpki-roots"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots"] }
+tokio = { version = "1", features = ["rt", "macros"] }
+rayon = "1"
+futures = "0.3"
+flate2 = { workspace = true }

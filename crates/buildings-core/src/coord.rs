@@ -62,6 +62,30 @@ pub fn wgs84_to_ecef(p: LonLat, height: f64) -> [f64; 3] {
     [x, y, z]
 }
 
+/// ECEF metres → WGS84 (lon/lat in degrees, height in metres). Closed-form
+/// Bowring solution; sub-millimetre accuracy at terrestrial radii.
+pub fn ecef_to_wgs84(p: [f64; 3]) -> (LonLat, f64) {
+    let (x, y, z) = (p[0], p[1], p[2]);
+    let b = A * (1.0 - F);
+    let ep2 = (A * A - b * b) / (b * b);
+    let r = (x * x + y * y).sqrt();
+    let theta = (z * A).atan2(r * b);
+    let sin_t = theta.sin();
+    let cos_t = theta.cos();
+    let lat = (z + ep2 * b * sin_t * sin_t * sin_t)
+        .atan2(r - E2 * A * cos_t * cos_t * cos_t);
+    let lon = y.atan2(x);
+    let n = A / (1.0 - E2 * lat.sin() * lat.sin()).sqrt();
+    let h = r / lat.cos() - n;
+    (
+        LonLat {
+            lon_deg: lon.to_degrees(),
+            lat_deg: lat.to_degrees(),
+        },
+        h,
+    )
+}
+
 /// Column-major 4x4 ENU→ECEF affine anchored at `origin`. glTF's
 /// `node.matrix` is column-major. Origin sits on the WGS84 ellipsoid
 /// (h = 0); use [`enu_to_ecef_matrix_at_height`] to lift it to the

@@ -177,6 +177,168 @@ pub fn default_height_meters(
     (h, method)
 }
 
+/// One Overture building's resolved metadata + polygon ring(s) in
+/// lon/lat. Produced by [`extract_buildings`]; used by the
+/// height-optimizer to evaluate the height cascade against ground
+/// truth without re-implementing the de-fragmentation + dedup logic.
+#[derive(Debug, Clone)]
+pub struct ExtractedBuilding {
+    pub feature_id: Option<u64>,
+    pub gers_id: Option<String>,
+    pub class: Option<String>,
+    pub subtype: Option<String>,
+    pub footprint_m2: f32,
+    pub height_m: f32,
+    pub height_method: &'static str,
+    pub source_height_m: Option<f32>,
+    pub num_floors: Option<u32>,
+    /// Area-weighted centroid (degrees).
+    pub centroid: LonLat,
+    /// Outer rings of every fragment, in lon/lat. One ring per
+    /// fragment — multi-tile buildings have multiple. Used by the
+    /// matcher's "point-in-polygon" test.
+    pub outer_rings_lonlat: Vec<Vec<LonLat>>,
+}
+
+/// Decode + dedup + height-resolve every building in `sources`.
+/// Mirrors [`build_mesh`]'s aggregation pass minus the extrusion. The
+/// urban-density classifier runs against the raw building counts so
+/// the output matches what `build_mesh` would render for the same
+/// input.
+pub fn extract_buildings(
+    sources: &[Source<'_>],
+    height_config: &HeightConfig,
+) -> Vec<ExtractedBuilding> {
+    let total_buildings: usize = sources.iter().map(|s| s.tile.buildings.len()).sum();
+    let avg_per_source =
+        total_buildings as f32 / (sources.len().max(1) as f32);
+    let urban = classify_urban(avg_per_source, height_config);
+
+    struct Pending {
+        props: FeatureProps,
+        total_area_m2: f32,
+        rings: Vec<Vec<LonLat>>,
+        centroid_lon_w: f64,
+        centroid_lat_w: f64,
+        centroid_w: f64,
+    }
+    let mut by_id: HashMap<u64, usize> = HashMap::new();
+    let mut pending: Vec<Pending> = Vec::new();
+
+    for source in sources {
+        for feat in &source.tile.buildings {
+            let polygons = group_polygons(&feat.rings);
+            for polygon in polygons {
+                let area = polygon_area_m2(&polygon, source, source.tile.extent) as f32;
+                let centroid_ll =
+                    polygon_centroid_lonlat(&polygon, source, source.tile.extent);
+                let outer_ll: Vec<LonLat> = polygon
+                    .outer
+                    .iter()
+                    .map(|p| {
+                        coord::tile_xy_to_lonlat(
+                            source.z,
+                            source.x,
+                            source.y,
+                            source.tile.extent,
+                            p[0],
+                            p[1],
+                        )
+                    })
+                    .collect();
+                let w = area as f64;
+                let entry_idx = match feat.id {
+                    Some(fid) => match by_id.get(&fid).copied() {
+                        Some(idx) => {
+                            pending[idx].total_area_m2 += area;
+                            pending[idx].rings.push(outer_ll);
+                            idx
+                        }
+                        None => {
+                            let idx = pending.len();
+                            by_id.insert(fid, idx);
+                            pending.push(Pending {
+                                props: feature_props(feat, area, urban, height_config),
+                                total_area_m2: area,
+                                rings: vec![outer_ll],
+                                centroid_lon_w: 0.0,
+                                centroid_lat_w: 0.0,
+                                centroid_w: 0.0,
+                            });
+                            idx
+                        }
+                    },
+                    None => {
+                        let idx = pending.len();
+                        pending.push(Pending {
+                            props: feature_props(feat, area, urban, height_config),
+                            total_area_m2: area,
+                            rings: vec![outer_ll],
+                            centroid_lon_w: 0.0,
+                            centroid_lat_w: 0.0,
+                            centroid_w: 0.0,
+                        });
+                        idx
+                    }
+                };
+                pending[entry_idx].centroid_lon_w += centroid_ll.lon_deg * w;
+                pending[entry_idx].centroid_lat_w += centroid_ll.lat_deg * w;
+                pending[entry_idx].centroid_w += w;
+            }
+        }
+    }
+
+    pending
+        .into_iter()
+        .map(|mut b| {
+            b.props.footprint_m2 = b.total_area_m2;
+            // Re-resolve height with the merged area (matters for
+            // multi-fragment buildings that fall through to the
+            // footprint heuristic).
+            let pseudo = mvt_decoder::BuildingFeature {
+                id: b.props.feature_id,
+                rings: vec![],
+                height: b.props.source_height_m.map(|h| h as f64),
+                num_floors: if b.props.num_floors == 0 {
+                    None
+                } else {
+                    Some(b.props.num_floors as u32)
+                },
+                class: b.props.class.clone(),
+                subtype: b.props.subtype.clone(),
+                ..Default::default()
+            };
+            let (h, method) =
+                default_height_meters(&pseudo, b.total_area_m2, urban, height_config);
+            let centroid = if b.centroid_w > 0.0 {
+                LonLat {
+                    lon_deg: b.centroid_lon_w / b.centroid_w,
+                    lat_deg: b.centroid_lat_w / b.centroid_w,
+                }
+            } else {
+                LonLat { lon_deg: 0.0, lat_deg: 0.0 }
+            };
+            ExtractedBuilding {
+                feature_id: b.props.feature_id,
+                gers_id: b.props.gers_id,
+                class: b.props.class,
+                subtype: b.props.subtype,
+                footprint_m2: b.total_area_m2,
+                height_m: h as f32,
+                height_method: method,
+                source_height_m: b.props.source_height_m,
+                num_floors: if b.props.num_floors == 0 {
+                    None
+                } else {
+                    Some(b.props.num_floors as u32)
+                },
+                centroid,
+                outer_rings_lonlat: b.rings,
+            }
+        })
+        .collect()
+}
+
 /// One clipped polygon belonging to some (possibly multi-fragment) building.
 struct Fragment {
     /// Index into the parent `sources` slice. Lets us look up
