@@ -1,4 +1,6 @@
-//! End-to-end glb tile builder.
+//! End-to-end glb tile builder for Overture Maps building MVTs, with
+//! per-building ground elevation pulled from a Re:Earth Terrain
+//! Terrarium WebP tile.
 
 use bytes::Bytes;
 
@@ -12,6 +14,8 @@ pub use mesh::AreaFilter;
 pub enum Error {
     #[error(transparent)]
     Mvt(#[from] mvt_decoder::Error),
+    #[error(transparent)]
+    Terrain(#[from] terrain_decoder::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -23,12 +27,23 @@ pub struct MvtInput<'a> {
     pub bytes: &'a [u8],
 }
 
-/// Render an output tile from one or more source MVT tiles.
+/// Optional terrain raster covering the output tile.
+pub struct TerrainInput<'a> {
+    pub z: u8,
+    pub x: u32,
+    pub y: u32,
+    /// Mapzen Terrarium-encoded WebP bytes from
+    /// `terrain.reearth.land/terrarium/ellipsoid/{z}/{x}/{y}.webp`.
+    pub webp: &'a [u8],
+}
+
+/// Render an output tile from one or more source MVT tiles. Buildings
+/// are placed on the ground using `terrain` (sample at each building's
+/// centroid). Pass `None` to anchor everything at ellipsoidal h=0.
 ///
-/// * `simplify_ratio`: 1.0 keeps every triangle; < 1.0 hands the mesh to
-///   `meshopt::simplify` to drop tris while staying within
-///   `simplify_target_error_m` metres of the original surface. Use this
-///   for parent (z=13) tiles where exact geometry isn't needed.
+/// `simplify_ratio < 1.0` hands the mesh to `meshopt::simplify` to drop
+/// triangles while staying within `simplify_target_error_m` metres of
+/// the original surface; useful for parent (z<MAX_Z) tiles.
 #[allow(clippy::too_many_arguments)]
 pub fn render_glb_lod(
     out_z: u8,
@@ -38,14 +53,11 @@ pub fn render_glb_lod(
     filter: AreaFilter,
     simplify_ratio: f32,
     simplify_target_error_m: f32,
-    // EGM2008 undulation in metres at the output tile centre. Anchors
-    // every building's base on the geoid (mean sea level) so glbs sit
-    // at the right altitude relative to Cesium terrain.
-    geoid_offset_m: f32,
     // When true, every polygon is collapsed to its axis-aligned bounding
     // rectangle before extrusion. Produces a "block mesh" silhouette for
     // the coarsest LOD level without invoking meshopt simplify.
     aabb_only: bool,
+    terrain: Option<TerrainInput<'_>>,
 ) -> Result<Bytes> {
     let decoded: Vec<(u8, u32, u32, mvt_decoder::DecodedTile)> = sources
         .iter()
@@ -60,21 +72,32 @@ pub fn render_glb_lod(
             tile: t,
         })
         .collect();
-    let mut mesh = mesh::build_mesh(out_z, out_x, out_y, &mesh_sources, filter, aabb_only);
+
+    let terrain_tile = match terrain {
+        Some(t) => Some(terrain_decoder::decode_terrarium_webp(
+            t.z, t.x, t.y, t.webp,
+        )?),
+        None => None,
+    };
+
+    let mut mesh = mesh::build_mesh(
+        out_z,
+        out_x,
+        out_y,
+        &mesh_sources,
+        filter,
+        aabb_only,
+        terrain_tile.as_ref(),
+    );
 
     if simplify_ratio > 0.0 && simplify_ratio < 1.0 {
         mesh::simplify_mesh(&mut mesh, simplify_ratio, simplify_target_error_m);
     }
 
     let center = coord::tile_center(out_z, out_x, out_y);
-    let m = coord::enu_to_ecef_matrix_at_height(center, geoid_offset_m as f64);
-    // Two compositions: first re-shuffle the basis columns so the matrix
-    // accepts our Y-up local vertices (vx=east, vy=up, vz=-north), then
-    // apply Z_UP_TO_Y_UP to the matrix output so Cesium's automatic
-    // Y_UP_TO_Z_UP unwrap leaves the geometry sitting at the correct
-    // ECEF location. Without the second step Cesium silently places the
-    // entire tileset at the swap-rotated coordinate, which lands in the
-    // wrong country and makes everything invisible.
+    // Origin sits on the ellipsoid (h=0). Ground elevation per building
+    // is already baked into vertex positions during build_mesh.
+    let m = coord::enu_to_ecef_matrix(center);
     let local_yup = remap_yup_to_enu(m);
     let transform = apply_zup_to_yup_to_output(local_yup);
 
@@ -104,10 +127,6 @@ fn remap_yup_to_enu(enu_to_ecef: [f64; 16]) -> [f64; 16] {
     out
 }
 
-/// Pre-compose the matrix with Cesium's `Axis.Z_UP_TO_Y_UP` rotation so its
-/// (always-on) `Axis.Y_UP_TO_Z_UP` post-rotation cancels back out to the
-/// correct ECEF placement. For each column `(cx, cy, cz, cw)` of the
-/// input matrix we emit `(cx, cz, -cy, cw)`.
 fn apply_zup_to_yup_to_output(m: [f64; 16]) -> [f64; 16] {
     let mut out = [0.0f64; 16];
     for i in 0..4 {
@@ -138,8 +157,8 @@ mod tests {
             AreaFilter::default(),
             1.0,
             0.0,
-            0.0,
             false,
+            None,
         )
         .unwrap();
         assert!(glb.len() > 20);

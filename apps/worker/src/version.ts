@@ -5,72 +5,88 @@ import { LOD_MODE } from "./lod";
  * Bump when the renderer / glb schema changes. Lives in the URL prefix so
  * a bump alone invalidates every cache layer atomically.
  *
- * Daily upstream updates are *not* propagated through this constant.
+ * Monthly upstream updates are *not* propagated through this constant.
  * Instead, the glb route uses a content hash of the MVT bytes for the
  * ETag and R2 cache key — unchanged tiles stay deduplicated across
- * pmtiles builds, so only tiles whose source content actually changed
- * get re-rendered.
+ * Overture releases, so only tiles whose source content actually
+ * changed get re-rendered.
  *
  * The LOD mode is appended too: switching ADD ↔ REPLACE changes the
  * meaning of the geometry at every zoom, so a flip must invalidate the
  * whole URL space.
  */
-// v2: introduced z=12 mega-landmark layer, restructured leaf subtree
-// (LEAF_PARENT_Z = 11). All earlier URL paths no longer make sense.
-const RENDERER_VERSION = "v2";
+// v3: Overture Maps Buildings + Re:Earth Terrain ground placement.
+// Earlier (v2) URL paths used Protomaps OSM and EGM2008 anchoring and
+// no longer make sense.
+const RENDERER_VERSION = "v3";
 export const IMPL_VERSION = `${RENDERER_VERSION}-${LOD_MODE}`;
 
 /**
- * Where Protomaps publishes daily planet builds. Each `${YYYYMMDD}.pmtiles`
- * URL is immutable.
+ * Where Overture Maps publishes the buildings PMTiles. Each release lives
+ * under an immutable date prefix (e.g. `2026-01-21/`).
  */
-const UPSTREAM_BASE = "https://build.protomaps.com";
+const UPSTREAM_BUCKET = "https://overturemaps-tiles-us-west-2-beta.s3.amazonaws.com";
 
-/** Reasonable upper bound when walking back to find the most recent build. */
-const MAX_PROBE_DAYS = 7;
-
-const KV_LATEST_KEY = "pmtiles:latest";
-const KV_LATEST_TTL_SECONDS = 3600;
+const KV_LATEST_KEY = "overture:latest";
+const KV_LATEST_TTL_SECONDS = 86400;
 
 /**
- * Resolve the upstream PMTiles date to fetch from. Always auto-discovers
- * via a KV-cached HEAD probe; for reproducible repros, pin the date by
- * pre-populating the KV namespace under "pmtiles:latest".
+ * Resolve the upstream Overture release to fetch from. Auto-discovers via
+ * a KV-cached S3 ListBucket; for reproducible repros, pin a release by
+ * pre-populating the KV namespace under "overture:latest".
  */
 export async function currentPmtilesDate(env: Env): Promise<string> {
   const cached = await env.PMTILES_DIR.get(KV_LATEST_KEY);
   if (cached) return cached;
-  const fresh = await probeLatestDate();
+  const fresh = await probeLatestRelease();
   await env.PMTILES_DIR.put(KV_LATEST_KEY, fresh, {
     expirationTtl: KV_LATEST_TTL_SECONDS,
   });
   return fresh;
 }
 
-/** Build the absolute upstream URL for a specific PMTiles date. */
-export function upstreamUrl(date: string): string {
-  return `${UPSTREAM_BASE}/${date}.pmtiles`;
+/** Build the absolute upstream URL for a specific Overture release. */
+export function upstreamUrl(release: string): string {
+  return `${UPSTREAM_BUCKET}/${release}/buildings.pmtiles`;
 }
 
-async function probeLatestDate(): Promise<string> {
-  const now = Date.now();
-  for (let i = 0; i < MAX_PROBE_DAYS; i++) {
-    const ts = now - i * 86_400_000;
-    const date = formatUtcDate(new Date(ts));
-    const r = await fetch(upstreamUrl(date), {
-      method: "HEAD",
-      cf: { cacheTtl: 60, cacheEverything: true },
-    } as RequestInit);
-    if (r.ok) return date;
+async function probeLatestRelease(): Promise<string> {
+  // S3 ListBucketV2 with delimiter=/ returns a CommonPrefixes entry for
+  // every release directory at the bucket root. They sort lexically into
+  // chronological order (yyyy-mm-dd...).
+  const listUrl = `${UPSTREAM_BUCKET}/?list-type=2&delimiter=%2F`;
+  const r = await fetch(listUrl, {
+    cf: { cacheTtl: 3600, cacheEverything: true },
+  } as RequestInit);
+  if (!r.ok) {
+    throw new Error(`overture ListBucket failed: ${r.status}`);
   }
-  throw new Error(
-    `no recent PMTiles build found at ${UPSTREAM_BASE} within ${MAX_PROBE_DAYS} days`,
-  );
-}
-
-function formatUtcDate(d: Date): string {
-  const y = d.getUTCFullYear();
-  const m = `${d.getUTCMonth() + 1}`.padStart(2, "0");
-  const day = `${d.getUTCDate()}`.padStart(2, "0");
-  return `${y}${m}${day}`;
+  const xml = await r.text();
+  const releases: string[] = [];
+  const re = /<Prefix>([^<]+?)\/<\/Prefix>/g;
+  for (const m of xml.matchAll(re)) {
+    const p = m[1] ?? "";
+    // Releases are yyyy-mm-dd (with optional `-beta` suffix for the very
+    // first one). Anything that doesn't start with a 4-digit year is some
+    // other kind of prefix and should be ignored.
+    if (/^\d{4}-\d{2}-\d{2}/.test(p)) releases.push(p);
+  }
+  if (releases.length === 0) {
+    throw new Error("no Overture releases found in bucket listing");
+  }
+  // Lexical sort = chronological order for these prefixes; -beta sorts
+  // first under 2024-06-13 vs 2024-06-13-beta which is what we want
+  // (prefer the non-beta form when both exist on the same day).
+  releases.sort();
+  // Filter out any beta-only entries that share a date with a stable one.
+  const dateOf = (r: string) => r.slice(0, 10);
+  const latest = releases[releases.length - 1] ?? "";
+  const latestDate = dateOf(latest);
+  // Prefer the non-beta release for the latest date if both exist.
+  for (let i = releases.length - 1; i >= 0; i--) {
+    const r = releases[i] ?? "";
+    if (dateOf(r) !== latestDate) break;
+    if (!r.endsWith("-beta")) return r;
+  }
+  return latest;
 }

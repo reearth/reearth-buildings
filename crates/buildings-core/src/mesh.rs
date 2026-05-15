@@ -1,23 +1,39 @@
-//! Extrude MVT building polygons (possibly drawn from several source
-//! tiles) into a flat-shaded triangle mesh anchored at an output tile.
+//! Extrude Overture MVT building polygons (possibly drawn from several
+//! source tiles) into a flat-shaded triangle mesh anchored at an output
+//! tile.
 //!
 //! Output frame: tile-local ENU metres (east/north/up), centred on the
 //! output tile's centre. y is up in the glb-friendly remapping below.
+//! Per-building ground elevation comes from a Re:Earth Terrain tile sampled
+//! at each building's centroid.
 
 use crate::coord::{self, LonLat};
 use mvt_decoder::{BuildingFeature, DecodedTile};
 use std::collections::HashMap;
+use terrain_decoder::TerrainTile;
 
 /// Per-building metadata, indexed by FEATURE_ID written into the mesh.
 #[derive(Debug, Clone, Default)]
 pub struct FeatureProps {
-    pub osm_id: Option<i64>,
+    /// MVT feature id (Planetiler-hashed Overture id). Stable for dedup
+    /// across source tiles within one PMTiles release.
+    pub feature_id: Option<u64>,
+    /// GERS feature id (string). Stable across releases.
+    pub gers_id: Option<String>,
     pub name: Option<String>,
-    pub kind: Option<String>,
-    pub building: Option<String>,
+    pub subtype: Option<String>,
+    pub class: Option<String>,
     pub height_m: f32,
     pub min_height_m: f32,
-    pub levels: u16,
+    pub roof_height_m: f32,
+    pub roof_shape: Option<String>,
+    pub roof_material: Option<String>,
+    pub roof_color: Option<String>,
+    pub facade_material: Option<String>,
+    pub facade_color: Option<String>,
+    pub num_floors: u16,
+    /// Ground elevation (ellipsoidal metres) sampled at the centroid.
+    pub ground_elev_m: f32,
     pub footprint_m2: f32,
 }
 
@@ -54,15 +70,16 @@ impl AreaFilter {
     }
 }
 
+/// Pick the building height in metres, falling back from explicit
+/// `height` → `num_floors × 3 m` → a constant. Overture's height
+/// coverage is partial outside well-mapped cities, so the fallback
+/// dominates many regions.
 pub fn default_height_meters(feat: &BuildingFeature) -> f64 {
-    match (feat.height, feat.levels) {
+    match (feat.height, feat.num_floors) {
         (Some(h), _) if h > 0.0 => h,
-        (_, Some(l)) if l > 0.0 => l * 3.0,
-        // Tokyo OSM data rarely tags small commercial / residential
-        // buildings, so the fallback dominates downtown views. 12 m
-        // (≈ four floors) keeps the cityscape recognisable at distance.
-        // Category-based heuristics from `building` / `kind` are a
-        // future refinement.
+        (_, Some(l)) if l > 0 => (l as f64) * 3.0,
+        // 12 m (≈ four floors) keeps the cityscape recognisable when
+        // height/floor tagging is missing.
         _ => 12.0,
     }
 }
@@ -79,6 +96,12 @@ struct PendingFeature {
     props: FeatureProps,
     total_area_m2: f32,
     fragments: Vec<Fragment>,
+    /// Lon/lat sum and weight for the area-weighted centroid (used to
+    /// sample terrain). Centroid is computed at emit time so that
+    /// multi-fragment buildings get a single ground elevation.
+    centroid_lon_weighted: f64,
+    centroid_lat_weighted: f64,
+    centroid_weight: f64,
 }
 
 pub fn build_mesh(
@@ -88,11 +111,12 @@ pub fn build_mesh(
     sources: &[Source<'_>],
     filter: AreaFilter,
     aabb_only: bool,
+    terrain: Option<&TerrainTile>,
 ) -> Mesh {
     let anchor = coord::tile_center(out_z, out_x, out_y);
 
-    // ---- 1. collect all fragments, grouping by OSM id ----
-    let mut by_osm: HashMap<u64, usize> = HashMap::new();
+    // ---- 1. collect all fragments, grouping by feature id ----
+    let mut by_id: HashMap<u64, usize> = HashMap::new();
     let mut pending: Vec<PendingFeature> = Vec::new();
 
     for (src_idx, source) in sources.iter().enumerate() {
@@ -103,6 +127,8 @@ pub fn build_mesh(
             }
             for polygon in polygons {
                 let area = polygon_area_m2(&polygon, source, source.tile.extent) as f32;
+                let centroid_ll =
+                    polygon_centroid_lonlat(&polygon, source, source.tile.extent);
                 let polygon = if aabb_only {
                     polygon_to_aabb(&polygon)
                 } else {
@@ -112,32 +138,46 @@ pub fn build_mesh(
                     source_idx: src_idx,
                     polygon,
                 };
-                match feat.id {
-                    Some(osm_id) => match by_osm.get(&osm_id).copied() {
+                let w = area as f64;
+                let entry_idx = match feat.id {
+                    Some(fid) => match by_id.get(&fid).copied() {
                         Some(idx) => {
                             pending[idx].fragments.push(fragment);
                             pending[idx].total_area_m2 += area;
+                            idx
                         }
                         None => {
-                            by_osm.insert(osm_id, pending.len());
+                            let idx = pending.len();
+                            by_id.insert(fid, idx);
                             pending.push(PendingFeature {
                                 props: feature_props(feat, area),
                                 total_area_m2: area,
                                 fragments: vec![fragment],
+                                centroid_lon_weighted: 0.0,
+                                centroid_lat_weighted: 0.0,
+                                centroid_weight: 0.0,
                             });
+                            idx
                         }
                     },
                     None => {
-                        // No stable id → can't dedup. Each unidentified
-                        // feature counts as its own building. Mostly a
-                        // theoretical case for OSM data.
+                        // No stable id → can't dedup; each unidentified
+                        // feature counts as its own building.
+                        let idx = pending.len();
                         pending.push(PendingFeature {
                             props: feature_props(feat, area),
                             total_area_m2: area,
                             fragments: vec![fragment],
+                            centroid_lon_weighted: 0.0,
+                            centroid_lat_weighted: 0.0,
+                            centroid_weight: 0.0,
                         });
+                        idx
                     }
-                }
+                };
+                pending[entry_idx].centroid_lon_weighted += centroid_ll.lon_deg * w;
+                pending[entry_idx].centroid_lat_weighted += centroid_ll.lat_deg * w;
+                pending[entry_idx].centroid_weight += w;
             }
         }
     }
@@ -154,8 +194,26 @@ pub fn build_mesh(
             continue;
         }
         building.props.footprint_m2 = building.total_area_m2;
-        let height = building.props.height_m as f64;
-        let min_h = building.props.min_height_m as f64;
+
+        // Centroid for terrain sampling — area-weighted so multi-fragment
+        // buildings settle on the right ground elevation.
+        let ground_elev = if let Some(t) = terrain {
+            let (lon, lat) = if building.centroid_weight > 0.0 {
+                (
+                    building.centroid_lon_weighted / building.centroid_weight,
+                    building.centroid_lat_weighted / building.centroid_weight,
+                )
+            } else {
+                (anchor.lon_deg, anchor.lat_deg)
+            };
+            t.sample(lon, lat)
+        } else {
+            0.0
+        };
+        building.props.ground_elev_m = ground_elev;
+
+        let base_h = (ground_elev as f64) + (building.props.min_height_m as f64);
+        let top_h = (ground_elev as f64) + (building.props.height_m as f64);
         let fid = features.len().min(u16::MAX as usize - 1) as u16;
         features.push(building.props);
 
@@ -168,8 +226,8 @@ pub fn build_mesh(
                 source.tile.extent,
                 &fragment.polygon,
                 anchor,
-                min_h,
-                height,
+                base_h,
+                top_h,
                 fid,
                 &mut positions,
                 &mut normals,
@@ -189,17 +247,24 @@ pub fn build_mesh(
 
 fn feature_props(feat: &BuildingFeature, area_m2: f32) -> FeatureProps {
     FeatureProps {
-        osm_id: feat.id.map(|v| v as i64),
+        feature_id: feat.id,
+        gers_id: feat.gers_id.clone(),
         name: feat.name.clone(),
-        kind: feat.kind.clone(),
-        building: feat.building.clone(),
+        subtype: feat.subtype.clone(),
+        class: feat.class.clone(),
         height_m: default_height_meters(feat) as f32,
         min_height_m: feat.min_height.unwrap_or(0.0) as f32,
-        levels: feat
-            .levels
-            .unwrap_or(0.0)
-            .round()
-            .clamp(0.0, u16::MAX as f64) as u16,
+        roof_height_m: feat.roof_height.unwrap_or(0.0) as f32,
+        roof_shape: feat.roof_shape.clone(),
+        roof_material: feat.roof_material.clone(),
+        roof_color: feat.roof_color.clone(),
+        facade_material: feat.facade_material.clone(),
+        facade_color: feat.facade_color.clone(),
+        num_floors: feat
+            .num_floors
+            .unwrap_or(0)
+            .min(u16::MAX as u32) as u16,
+        ground_elev_m: 0.0,
         footprint_m2: area_m2,
     }
 }
@@ -315,12 +380,26 @@ fn ring_area_m2(ring: &[[i32; 2]], source: &Source<'_>, extent: u32, anchor: Lon
     0.5 * a
 }
 
-// (Boundary-wall skip removed: while it avoided drawing the internal
-// seam between two fragments of a tile-straddling building, it also
-// killed the actual exterior wall whenever a building's AABB happened
-// to align with the tile boundary — producing flat slabs without
-// visible walls. Doubled internal seams are mostly invisible from
-// outside the building, so the trade-off favours keeping walls.)
+/// Lon/lat centroid of a polygon (outer ring only). Sample-quality
+/// centroid for terrain lookup — we don't need geometric accuracy here.
+fn polygon_centroid_lonlat(polygon: &Polygon, source: &Source<'_>, extent: u32) -> LonLat {
+    let mut sum_lon = 0.0f64;
+    let mut sum_lat = 0.0f64;
+    let n = polygon.outer.len();
+    if n == 0 {
+        return coord::tile_center(source.z, source.x, source.y);
+    }
+    for p in &polygon.outer {
+        let ll =
+            coord::tile_xy_to_lonlat(source.z, source.x, source.y, extent, p[0], p[1]);
+        sum_lon += ll.lon_deg;
+        sum_lat += ll.lat_deg;
+    }
+    LonLat {
+        lon_deg: sum_lon / n as f64,
+        lat_deg: sum_lat / n as f64,
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 fn extrude_polygon(
@@ -434,9 +513,6 @@ fn extrude_ring_walls(
     if enu.len() < 3 {
         return;
     }
-    // Walls assume CW traversal in (east, north). Reverse CCW input (holes
-    // arrive that way) so the outward face points away from the building
-    // solid in both cases.
     let mut a_enu = 0.0;
     for i in 0..enu.len() {
         let p = enu[i];
@@ -446,9 +522,6 @@ fn extrude_ring_walls(
     let reverse = a_enu > 0.0;
     let n = enu.len();
     for i in 0..n {
-        // skip_edges is parallel to the original (un-reversed) ring. When
-        // we traverse in reverse, the edge that was index `i` originally
-        // is the one starting at index `n - 1 - i` in the new walk.
         if let Some(skips) = skip_edges {
             let original_idx = if reverse { (n - 1 - i) % n } else { i };
             if skips[original_idx] {
@@ -475,53 +548,27 @@ fn extrude_ring_walls(
             [b[0] as f32, top_height as f32, -b[1] as f32],
             [a[0] as f32, top_height as f32, -a[1] as f32],
         ];
-        // Flipped to match the reversed wall winding below: geometric and
-        // stored normals stay in agreement, which keeps PBR lighting and
-        // backface culling consistent.
         let n_vec = [-nx as f32, 0.0, nz as f32];
         for v in &verts {
             positions.extend_from_slice(v);
             normals.extend_from_slice(&n_vec);
             feature_ids.push(fid);
         }
-        // Reversed winding from the natural (a_bot, b_bot, b_top, a_top)
-        // CCW-from-outside order. Once the matrix gets composed with
-        // Cesium's automatic Y_UP_TO_Z_UP rotation the visible side
-        // flips, so the originally outside face ends up culled. We
-        // emit triangles in the rotated convention directly.
         indices.extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
     }
 }
 
-/// In-place mesh decimation via meshopt. `ratio` is the fraction of
-/// triangles to keep (e.g. 0.5 = halve). `target_error_m` is the maximum
-/// geometric deviation in metres meshopt is allowed to introduce.
-///
-/// Note: with `refine: ADD` in the tileset, simplified parent geometry
-/// stays visible at close zoom underneath the additive children, so
-/// using this for the parent permanently sacrifices silhouette
-/// quality on those buildings. We expose it as a toggle and default
-/// it off; a future `refine: REPLACE` LOD chain could turn it on
-/// without that side effect.
-///
-/// Vertex / normal / feature_id arrays are kept as-is. After simplify
-/// some vertices become unreferenced; the meshopt vertex encoder
-/// downstream deals with the slack, which is minor at z=13.
+/// In-place mesh decimation via meshopt. See lib.rs caller for rationale.
 pub fn simplify_mesh(mesh: &mut Mesh, ratio: f32, target_error_m: f32) {
     if ratio >= 1.0 || mesh.indices.len() < 6 {
         return;
     }
     let target = ((mesh.indices.len() as f32 * ratio) as usize).max(3) / 3 * 3;
-    // meshopt::simplify wants positions as raw bytes via VertexDataAdapter.
     let pos_bytes: &[u8] = bytemuck_slice(&mesh.positions);
     let adapter = match meshopt::VertexDataAdapter::new(pos_bytes, 12, 0) {
         Ok(a) => a,
         Err(_) => return,
     };
-    // simplify_sloppy ignores topology and can collapse across the many
-    // small disconnected buildings in our mesh, which the strict
-    // (topology-preserving) variant can't make headway on. We accept the
-    // looser shape because z=13 is a distance LOD anyway.
     let new_indices =
         meshopt::simplify_sloppy(&mesh.indices, &adapter, target, target_error_m, None);
     if !new_indices.is_empty() {
@@ -530,7 +577,5 @@ pub fn simplify_mesh(mesh: &mut Mesh, ratio: f32, target_error_m: f32) {
 }
 
 fn bytemuck_slice(v: &[f32]) -> &[u8] {
-    // Safe: f32 has no padding; the resulting slice is reinterpreted bytes
-    // with the same lifetime.
     unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v)) }
 }

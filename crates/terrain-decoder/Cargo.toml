@@ -1,0 +1,11 @@
+[package]
+name = "terrain-decoder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Mapzen Terrarium WebP terrain tile decoder + bilinear sampler"
+
+[dependencies]
+thiserror = { workspace = true }
+image-webp = { workspace = true }

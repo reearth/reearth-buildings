@@ -1,12 +1,9 @@
-//! WASM bridge: JS hands us one-or-more MVT byte blobs + their tile coords,
-//! we hand back glb bytes.
+//! WASM bridge: JS hands us one-or-more MVT byte blobs + their tile coords
+//! plus an optional terrain WebP tile, we hand back glb bytes.
 
 use std::sync::Once;
 use wasm_bindgen::prelude::*;
 
-// wasm-bindgen's auto-called `#[wasm_bindgen(start)]` hooks are skipped
-// by some hosts (workerd, in particular), leaving panics unintelligible.
-// Initialise lazily from the first WASM entry point instead.
 static INIT: Once = Once::new();
 
 fn ensure_init() {
@@ -16,11 +13,8 @@ fn ensure_init() {
 }
 
 // meshoptimizer's C++ allocator pulls in `operator new` / `operator delete`,
-// which on wasm32-unknown-unknown have no implementation and would show up
-// as `env._Znwm` / `env._ZdlPv` imports — which a bundler-target glb does
-// not provide. Backing them with Rust's global allocator keeps everything
-// self-contained. We stash the allocation size right before the user
-// pointer so the sizeless delete operator can recover a Layout.
+// which on wasm32-unknown-unknown have no implementation. Backing them with
+// Rust's global allocator keeps everything self-contained.
 #[cfg(target_arch = "wasm32")]
 mod cxx_runtime {
     use std::alloc::{alloc, dealloc, Layout};
@@ -31,7 +25,6 @@ mod cxx_runtime {
         Layout::from_size_align(size + HEADER, std::mem::align_of::<usize>()).unwrap()
     }
 
-    /// `operator new(size_t)`
     #[no_mangle]
     pub unsafe extern "C" fn _Znwm(size: usize) -> *mut u8 {
         let p = alloc(layout(size));
@@ -42,7 +35,6 @@ mod cxx_runtime {
         p.add(HEADER)
     }
 
-    /// `operator delete(void*)`
     #[no_mangle]
     pub unsafe extern "C" fn _ZdlPv(ptr: *mut u8) {
         if ptr.is_null() {
@@ -53,7 +45,6 @@ mod cxx_runtime {
         dealloc(base, layout(size));
     }
 
-    /// `operator delete(void*, size_t)` — sized form. C++14+ may emit this.
     #[no_mangle]
     pub unsafe extern "C" fn _ZdlPvm(ptr: *mut u8, _size: usize) {
         _ZdlPv(ptr);
@@ -61,12 +52,16 @@ mod cxx_runtime {
 }
 
 /// Render a glb for the output tile, aggregating geometry from any number
-/// of source MVT tiles and filtering by footprint area.
+/// of source MVT tiles, filtering by footprint area, and placing buildings
+/// on terrain sampled per-building from `terrain_webp`.
 ///
 /// JS encodes the source list as three parallel arrays:
 /// * `mvts_concat`: bytes for every source, concatenated in order.
 /// * `mvt_lens`: byte length of each MVT, parallel to `src_tiles`.
 /// * `src_tiles`: flat `[z0, x0, y0, z1, x1, y1, …]` for each MVT.
+///
+/// Pass an empty `terrain_webp` (length 0) to skip terrain sampling and
+/// anchor every building at h=0 on the ellipsoid.
 ///
 /// Setting `max_area_m2` (or `min_area_m2`) to `0` disables that bound.
 #[allow(clippy::too_many_arguments)]
@@ -82,8 +77,11 @@ pub fn render_glb_lod(
     max_area_m2: f32,
     simplify_ratio: f32,
     simplify_target_error_m: f32,
-    geoid_offset_m: f32,
     aabb_only: bool,
+    terrain_webp: &[u8],
+    terrain_z: u8,
+    terrain_x: u32,
+    terrain_y: u32,
 ) -> std::result::Result<Vec<u8>, JsError> {
     ensure_init();
     if mvt_lens.len() * 3 != src_tiles.len() {
@@ -110,6 +108,12 @@ pub fn render_glb_lod(
         min_m2: min_area_m2,
         max_m2: max_area_m2,
     };
+    let terrain = (!terrain_webp.is_empty()).then_some(buildings_core::TerrainInput {
+        z: terrain_z,
+        x: terrain_x,
+        y: terrain_y,
+        webp: terrain_webp,
+    });
     let bytes = buildings_core::render_glb_lod(
         out_z,
         out_x,
@@ -118,8 +122,8 @@ pub fn render_glb_lod(
         filter,
         simplify_ratio,
         simplify_target_error_m,
-        geoid_offset_m,
         aabb_only,
+        terrain,
     )
     .map_err(|e| JsError::new(&e.to_string()))?;
     Ok(bytes.into())

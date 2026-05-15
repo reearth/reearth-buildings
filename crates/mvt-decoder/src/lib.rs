@@ -1,5 +1,6 @@
 //! Minimal Mapbox Vector Tile (MVT) decoder, scoped to extracting the
-//! `buildings` layer from Protomaps planet tiles.
+//! `building` layer from Overture Maps PMTiles
+//! (overturemaps-tiles-us-west-2-beta).
 //!
 //! We hand-roll a tiny varint protobuf reader instead of pulling in
 //! `prost`/`protobuf` codegen. The MVT proto is only a handful of messages
@@ -7,6 +8,11 @@
 
 use flate2::read::GzDecoder;
 use std::io::Read;
+
+/// MVT layer name used by the Overture buildings PMTiles. Overture's
+/// Planetiler config splits the source by parquet `type=` field, so the
+/// per-building layer is singular.
+pub const LAYER_BUILDING: &str = "building";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -18,21 +24,56 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// One Overture building feature, restricted to the attributes we use to
+/// drive geometry or surface as glb metadata. Overture's full schema is
+/// richer — extend as needed.
 #[derive(Debug, Clone, Default)]
 pub struct BuildingFeature {
-    /// MVT feature id (varies by source; OSM tilers usually put the OSM way/relation id here).
+    /// MVT feature id. Overture's Planetiler hashes the GERS string id
+    /// into this `u64` — useful for dedup but **not** the GERS id itself.
     pub id: Option<u64>,
     /// One or more closed rings in tile-local coordinates (origin at NW of
     /// the tile, x→E, y→S). Each ring's first and last vertex are equal.
     pub rings: Vec<Vec<[i32; 2]>>,
+    /// Overture `height` (metres above local ground).
     pub height: Option<f64>,
+    /// Overture `min_height` (metres). Used for buildings that do not start
+    /// at ground level (pilotis, overhangs).
     pub min_height: Option<f64>,
-    pub levels: Option<f64>,
+    /// Overture `num_floors` (above ground). Drives the height fallback
+    /// when `height` is null.
+    pub num_floors: Option<u32>,
+    /// Overture `num_floors_underground`. Currently informational only.
+    pub num_floors_underground: Option<u32>,
+    /// Overture `min_floor`. Currently informational only.
+    pub min_floor: Option<u32>,
+    /// Overture `roof_height` (metres).
+    pub roof_height: Option<f64>,
+    /// Overture `roof_shape` enum (flat, gabled, hipped, …).
+    pub roof_shape: Option<String>,
+    /// Overture `roof_material` enum.
+    pub roof_material: Option<String>,
+    /// Overture `roof_color` (hex string).
+    pub roof_color: Option<String>,
+    /// Overture `facade_material` enum.
+    pub facade_material: Option<String>,
+    /// Overture `facade_color` (hex string).
+    pub facade_color: Option<String>,
+    /// Overture `subtype` enum (residential, commercial, …).
+    pub subtype: Option<String>,
+    /// Overture `class` enum (apartments, retail, …).
+    pub class: Option<String>,
+    /// Primary name. Overture exports this as a Planetiler helper key
+    /// (`@name`) alongside the JSON-encoded `names` struct; we only keep
+    /// the primary string.
     pub name: Option<String>,
-    /// Coarse category from the tiler (e.g. Protomaps "kind": apartments, school, ...).
-    pub kind: Option<String>,
-    /// Raw OSM `building` tag value.
-    pub building: Option<String>,
+    /// True when the feature is fully underground.
+    pub is_underground: Option<bool>,
+    /// True when the building has children in the building_part layer.
+    pub has_parts: Option<bool>,
+    /// GERS id (string). Stable across releases; useful for cross-data
+    /// joins with Overture parquet.
+    pub gers_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -43,7 +84,8 @@ pub struct DecodedTile {
 }
 
 /// Decode an MVT tile, optionally gzipped. Returns features from the
-/// `buildings` layer only (other layers are skipped without parsing).
+/// Overture `building` layer only (other layers — including
+/// `building_part` — are skipped without parsing).
 pub fn decode_buildings(tile_bytes: &[u8]) -> Result<DecodedTile> {
     let bytes = maybe_gunzip(tile_bytes)?;
     let mut p = Parser::new(&bytes);
@@ -78,7 +120,7 @@ fn maybe_gunzip(bytes: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
-/// Returns `Some` if this layer is `buildings`.
+/// Returns `Some` if this layer is the Overture `building` layer.
 fn decode_layer(layer_bytes: &[u8]) -> Result<Option<(u32, Vec<BuildingFeature>)>> {
     let mut p = Parser::new(layer_bytes);
     let mut name: Option<String> = None;
@@ -99,7 +141,7 @@ fn decode_layer(layer_bytes: &[u8]) -> Result<Option<(u32, Vec<BuildingFeature>)
         }
     }
 
-    if name.as_deref() != Some("buildings") {
+    if name.as_deref() != Some(LAYER_BUILDING) {
         return Ok(None);
     }
 
@@ -175,10 +217,21 @@ fn decode_feature(
         match key.as_str() {
             "height" => feat.height = value.as_f64(),
             "min_height" => feat.min_height = value.as_f64(),
-            "building:levels" | "levels" => feat.levels = value.as_f64(),
-            "name" => feat.name = value.as_string(),
-            "kind" | "class" => feat.kind = value.as_string(),
-            "building" => feat.building = value.as_string(),
+            "roof_height" => feat.roof_height = value.as_f64(),
+            "num_floors" => feat.num_floors = value.as_u32(),
+            "num_floors_underground" => feat.num_floors_underground = value.as_u32(),
+            "min_floor" => feat.min_floor = value.as_u32(),
+            "roof_shape" => feat.roof_shape = value.as_string(),
+            "roof_material" => feat.roof_material = value.as_string(),
+            "roof_color" => feat.roof_color = value.as_string(),
+            "facade_material" => feat.facade_material = value.as_string(),
+            "facade_color" => feat.facade_color = value.as_string(),
+            "subtype" => feat.subtype = value.as_string(),
+            "class" => feat.class = value.as_string(),
+            "@name" => feat.name = value.as_string(),
+            "is_underground" => feat.is_underground = value.as_bool(),
+            "has_parts" => feat.has_parts = value.as_bool(),
+            "id" => feat.gers_id = value.as_string(),
             _ => {}
         }
     }
@@ -247,7 +300,7 @@ enum Value {
     F64(f64),
     I64(i64),
     U64(u64),
-    Bool(#[allow(dead_code)] bool),
+    Bool(bool),
     None,
 }
 
@@ -262,9 +315,25 @@ impl Value {
             _ => None,
         }
     }
+    fn as_u32(&self) -> Option<u32> {
+        match self {
+            Value::I64(v) if *v >= 0 => u32::try_from(*v).ok(),
+            Value::U64(v) => u32::try_from(*v).ok(),
+            Value::F32(v) if v.is_finite() && *v >= 0.0 => Some(v.round() as u32),
+            Value::F64(v) if v.is_finite() && *v >= 0.0 => Some(v.round() as u32),
+            Value::Str(s) => s.parse().ok(),
+            _ => None,
+        }
+    }
     fn as_string(&self) -> Option<String> {
         match self {
             Value::Str(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+    fn as_bool(&self) -> Option<bool> {
+        match self {
+            Value::Bool(v) => Some(*v),
             _ => None,
         }
     }
@@ -402,7 +471,6 @@ mod tests {
 
     #[test]
     fn varint_decode() {
-        // 300 -> [0xac, 0x02]
         let mut p = Parser::new(&[0xac, 0x02]);
         assert_eq!(p.read_varint().unwrap(), 300);
     }

@@ -1,13 +1,6 @@
 // Wrangler imports `.wasm` files as a compiled `WebAssembly.Module`. We
 // pass that into wasm-bindgen's synchronous `initSync` once at module
 // load and then re-export the typed wrapper.
-//
-// Why not `wasm-pack --target bundler`? The bundler-target glue assumes
-// the bundler implements the "wasm import is treated as exports object"
-// convention. Esbuild (which wrangler uses) treats `.wasm` as a Module
-// instead, so the bundler glue ends up calling `wasm.__wbindgen_*` on a
-// plain Module and blowing up with TypeError. The web target gives us
-// explicit init and works the same way under Node.
 
 import { initSync, render_glb_lod } from "../wasm/buildings_wasm";
 import wasmModule from "../wasm/buildings_wasm_bg.wasm";
@@ -35,13 +28,21 @@ export interface SimplifyOptions {
   targetErrorM: number;
 }
 
+export interface TerrainTile {
+  /** Mapzen Terrarium-encoded WebP bytes. Empty array = skip terrain. */
+  webp: Uint8Array;
+  z: number;
+  x: number;
+  y: number;
+}
+
 export function renderGlbWasm(
   sources: SourceTile[],
   out: { z: number; x: number; y: number },
   filter: AreaFilter,
   simplify: SimplifyOptions = { ratio: 1, targetErrorM: 0 },
-  geoidOffsetM = 0,
   aabbOnly = false,
+  terrain: TerrainTile | null = null,
 ): Uint8Array {
   const totalLen = sources.reduce((s, src) => s + src.mvt.length, 0);
   const concat = new Uint8Array(totalLen);
@@ -57,6 +58,10 @@ export function renderGlbWasm(
     tiles[i * 3 + 1] = s.x;
     tiles[i * 3 + 2] = s.y;
   }
+  const terrainBytes = terrain?.webp ?? new Uint8Array(0);
+  const terrainZ = terrain?.z ?? 0;
+  const terrainX = terrain?.x ?? 0;
+  const terrainY = terrain?.y ?? 0;
   return render_glb_lod(
     concat,
     lens,
@@ -68,7 +73,10 @@ export function renderGlbWasm(
     filter.maxM2,
     simplify.ratio,
     simplify.targetErrorM,
-    geoidOffsetM,
     aabbOnly,
+    terrainBytes,
+    terrainZ,
+    terrainX,
+    terrainY,
   );
 }

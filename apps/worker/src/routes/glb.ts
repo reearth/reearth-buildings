@@ -1,33 +1,29 @@
 import type { Context } from "hono";
-import { geoidUndulation } from "../egm";
 import { type Env, cacheDisabled } from "../env";
 import { sha1Hex } from "../hash";
 import { MAX_Z, MIN_Z, aabbOnlyAt, areaFilterFor, simplifyFor } from "../lod";
 import { fetchBuildingsMvt } from "../pmtiles";
-import { tileCenter } from "../tile";
+import { fetchTerrainWebp } from "../terrain";
 import { IMPL_VERSION, currentPmtilesDate } from "../version";
 import { type SourceTile, renderGlbWasm } from "../wasm";
 
 /**
  * Content-addressable, LOD-aware tile delivery.
  *
- * z=13 aggregates the four z=14 children's MVTs and keeps only buildings
- * with footprint ≥ THRESHOLD_M2 (large landmarks). z=14 keeps only
- * buildings smaller than that. Together with refine:ADD in tileset.json
- * the two layers compose without overlap.
+ * z=12 keeps mega landmarks (footprint ≥ MEGA_M2). z=13 aggregates the
+ * z=14 children and keeps mid-sized buildings. z=14 keeps everything
+ * smaller. With refine:ADD in tileset.json the layers compose without
+ * overlap.
  *
- * The ETag is a hash of all MVT inputs concatenated with the filter
- * range — so any upstream change in any of the contributing tiles
- * invalidates only the affected output.
+ * The ETag is a hash of all MVT inputs concatenated with the LOD filter
+ * range and the terrain tile content — so any upstream change in any
+ * contributing tile invalidates only the affected output.
  */
 export const glbTile = async (c: Context<{ Bindings: Env }>) => {
   if (c.req.param("impl") !== IMPL_VERSION) {
     return c.text("unknown impl version — re-fetch /tileset.json", 410);
   }
 
-  // Route is `/:impl/:z/:x/:y` (no regex constraint to keep Hono happy
-  // alongside the sub-tileset pattern), so `y` arrives with the trailing
-  // ".glb" attached. Strip it here.
   const yRaw = c.req.param("y") ?? "";
   if (!yRaw.endsWith(".glb")) return c.text("not found", 404);
   const z = Number(c.req.param("z"));
@@ -40,37 +36,45 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     return c.text(`only z=${MIN_Z}..${MAX_Z} is served`, 404);
   }
 
-  const pmtilesDate = await currentPmtilesDate(c.env);
+  const release = await currentPmtilesDate(c.env);
 
   // Fetch the source MVTs that contribute to this output tile.
   const sourceCoords = childCoordsAtZ(z, x, y, MAX_Z);
   const sourceTiles: SourceTile[] = [];
   for (const sc of sourceCoords) {
-    const mvt = await fetchBuildingsMvt(pmtilesDate, sc.z, sc.x, sc.y);
+    const mvt = await fetchBuildingsMvt(release, sc.z, sc.x, sc.y);
     if (mvt) sourceTiles.push({ mvt, z: sc.z, x: sc.x, y: sc.y });
   }
   if (sourceTiles.length === 0) {
     return c.text("tile out of source coverage", 404);
   }
 
-  // Filter / simplify derive from LOD_MODE so a mode flip changes the
-  // payload semantics. IMPL_VERSION (URL prefix) also encodes the mode,
-  // keeping the URL space cache-safe across flips.
   const filter = areaFilterFor(z);
   const simplify = simplifyFor(z);
   const aabbOnly = aabbOnlyAt(z);
-  // EGM2008 undulation at the output tile centre; anchors building bases
-  // on the geoid so the tileset slots into Cesium terrain at the right
-  // altitude. Fail soft to 0 m when the geoid COG isn't provisioned —
-  // produces ellipsoid-anchored output, the previous behaviour.
-  let geoidOffsetM = 0;
-  const center = tileCenter(z, x, y);
+
+  // Terrain for the same (z, x, y). One WebP covers the whole output
+  // tile; build_mesh samples per-building at the centroid. Failure is
+  // soft: fall back to ellipsoid-anchored output, the worst case being
+  // buildings sitting at h=0 instead of on the ground.
+  let terrainTile: { webp: Uint8Array; z: number; x: number; y: number } | null = null;
   try {
-    geoidOffsetM = await geoidUndulation(c.env, center.lonDeg, center.latDeg);
+    const webp = await fetchTerrainWebp(z, x, y);
+    if (webp) terrainTile = { webp, z, x, y };
   } catch {
-    geoidOffsetM = 0;
+    terrainTile = null;
   }
-  const hash = await hashSources(sourceTiles, z, x, y, filter, simplify, geoidOffsetM, aabbOnly);
+
+  const hash = await hashSources(
+    sourceTiles,
+    z,
+    x,
+    y,
+    filter,
+    simplify,
+    aabbOnly,
+    terrainTile?.webp,
+  );
   const etag = `"${hash}"`;
   const noCache = cacheDisabled(c.env);
   const headers = {
@@ -90,13 +94,13 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     if (cached) {
       return new Response(cached.body, { headers });
     }
-    const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, geoidOffsetM, aabbOnly);
+    const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, aabbOnly, terrainTile);
     c.executionCtx.waitUntil(c.env.CACHE.put(r2Key, glb));
     return new Response(glb, { headers });
   }
 
   // CACHE_DISABLED: always regenerate, never touch R2.
-  const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, geoidOffsetM, aabbOnly);
+  const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, aabbOnly, terrainTile);
   return new Response(glb, { headers });
 };
 
@@ -113,7 +117,7 @@ function childCoordsAtZ(z: number, x: number, y: number, targetZ: number) {
   return result;
 }
 
-/** Stable fingerprint covering inputs + filter + output coord. */
+/** Stable fingerprint covering inputs + filter + output coord + terrain. */
 async function hashSources(
   sources: SourceTile[],
   outZ: number,
@@ -121,15 +125,13 @@ async function hashSources(
   outY: number,
   filter: { minM2: number; maxM2: number },
   simplify: { ratio: number; targetErrorM: number },
-  geoidOffsetM: number,
   aabbOnly: boolean,
+  terrain: Uint8Array | undefined,
 ): Promise<string> {
+  const terrainTag = terrain ? await sha1Hex(terrain, 12) : "no-terrain";
   const header = new TextEncoder().encode(
-    `${outZ}/${outX}/${outY};f=${filter.minM2},${filter.maxM2};s=${simplify.ratio},${simplify.targetErrorM};g=${geoidOffsetM.toFixed(2)};a=${aabbOnly ? 1 : 0};n=${sources.length};`,
+    `${outZ}/${outX}/${outY};f=${filter.minM2},${filter.maxM2};s=${simplify.ratio},${simplify.targetErrorM};a=${aabbOnly ? 1 : 0};t=${terrainTag};n=${sources.length};`,
   );
-  // Hash each MVT first (cheap on cache hit, ~1ms), then mix into a final
-  // hash so input order matters but per-tile recomputation is avoided
-  // across versions of the filter / output coord.
   const per: Uint8Array[] = [header];
   for (const s of sources) {
     const h = await sha1Hex(s.mvt, 16);

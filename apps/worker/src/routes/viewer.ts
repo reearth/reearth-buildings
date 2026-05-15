@@ -105,18 +105,18 @@ const HTML = `<!DOCTYPE html>
     debugShowBoundingVolume: debug,
   });
   viewer.scene.primitives.add(tileset);
-  // Required ODbL attribution for OSM-derived building data, plus the
-  // Protomaps planet build we range-read at upstream. Cesium also
-  // auto-adds its own credit and the OpenStreetMap imagery credit.
+  // Required ODbL attribution for the OSM-derived buildings + Overture's
+  // ML-augmented additions, plus Re:Earth Terrain for ground placement.
+  // Cesium also auto-adds its own credit and the OSM imagery credit.
   viewer.creditDisplay.addStaticCredit(
     new Cesium.Credit(
-      'Building footprints © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a> (ODbL)',
+      'Buildings © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>, <a href="https://overturemaps.org/" target="_blank" rel="noopener">Overture Maps Foundation</a> (ODbL)',
       true,
     ),
   );
   viewer.creditDisplay.addStaticCredit(
     new Cesium.Credit(
-      'Vector tiles by <a href="https://protomaps.com/" target="_blank" rel="noopener">Protomaps</a>',
+      'Terrain by <a href="https://terrain.reearth.land/" target="_blank" rel="noopener">Re:Earth Terrain</a> (Mapterhorn / EGM2008)',
       true,
     ),
   );
@@ -186,19 +186,25 @@ const HTML = `<!DOCTYPE html>
     if (loaded) setActive("cesium");
   });
 
-  // ----- Terrain toggle (ellipsoid ↔ Cesium World Terrain) -----
-  // Useful for spotting whether a tileset anchors buildings on the
-  // geoid (Cesium OSM Buildings) or on the bare ellipsoid (vanilla
-  // 3D Tiles without the EGM offset).
+  // ----- Terrain toggle (ellipsoid ↔ Re:Earth Terrain) -----
+  // Our buildings already have ground elevation baked in (sampled from
+  // Re:Earth Terrain at render time). Toggling Re:Earth Terrain on
+  // therefore makes the ground meet the building bases cleanly; toggle
+  // off and the buildings appear floating above the ellipsoid.
   const btnTerrain = document.getElementById("btn-terrain");
   let terrainOn = false;
-  let cwt = null;
+  let reTerrain = null;
   btnTerrain.addEventListener("click", async () => {
     btnTerrain.disabled = true;
     try {
       if (!terrainOn) {
-        if (!cwt) cwt = await Cesium.createWorldTerrainAsync();
-        viewer.scene.setTerrain(new Cesium.Terrain(Promise.resolve(cwt)));
+        if (!reTerrain) {
+          reTerrain = await Cesium.CesiumTerrainProvider.fromUrl(
+            "https://terrain.reearth.land/cesium-mesh/ellipsoid",
+            { requestVertexNormals: true, requestWaterMask: false },
+          );
+        }
+        viewer.scene.setTerrain(new Cesium.Terrain(Promise.resolve(reTerrain)));
         terrainOn = true;
         btnTerrain.classList.add("active");
       } else {

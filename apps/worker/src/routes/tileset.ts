@@ -36,7 +36,8 @@ const WORLD_REGION = [
   HEIGHT_MAX_M,
 ];
 
-const COPYRIGHT = "© OpenStreetMap contributors (ODbL) · tiles by Protomaps";
+const COPYRIGHT =
+  "© OpenStreetMap contributors, Overture Maps Foundation (ODbL) · terrain by Re:Earth Terrain (Mapterhorn / EGM2008)";
 
 interface Tile {
   boundingVolume: { region: number[] };

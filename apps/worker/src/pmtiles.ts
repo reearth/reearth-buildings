@@ -29,30 +29,30 @@ class RangeSource implements Source {
 }
 
 // Per-isolate cache so a busy edge keeps its PMTiles header/leaf-directory
-// state hot across requests. Keyed by date so a pmtiles version bump
+// state hot across requests. Keyed by Overture release so a release bump
 // doesn't reuse a stale instance.
 const instances = new Map<string, PMTiles>();
 
-function pmtilesFor(date: string): PMTiles {
-  let inst = instances.get(date);
+function pmtilesFor(release: string): PMTiles {
+  let inst = instances.get(release);
   if (!inst) {
-    inst = new PMTiles(new RangeSource(upstreamUrl(date)));
-    instances.set(date, inst);
+    inst = new PMTiles(new RangeSource(upstreamUrl(release)));
+    instances.set(release, inst);
   }
   return inst;
 }
 
 /**
- * Fetch the (decompressed) MVT bytes for a tile from a specific upstream
- * date. Returns null if the tile is absent (e.g. ocean, out-of-coverage).
+ * Fetch the (decompressed) MVT bytes for a tile from a specific Overture
+ * release. Returns null if the tile is absent (e.g. ocean, out-of-coverage).
  */
 export async function fetchBuildingsMvt(
-  date: string,
+  release: string,
   z: number,
   x: number,
   y: number,
 ): Promise<Uint8Array | null> {
-  const tile = await pmtilesFor(date).getZxy(z, x, y);
+  const tile = await pmtilesFor(release).getZxy(z, x, y);
   if (!tile) return null;
   return new Uint8Array(tile.data);
 }

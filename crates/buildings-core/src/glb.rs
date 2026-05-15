@@ -94,10 +94,10 @@ pub fn write_glb(mesh: &Mesh, enu_to_ecef: [f64; 16]) -> Vec<u8> {
 
     // ---- uncompressed property-table buffer views (buffer 0, plain) ----
     let cols = collect_columns(&mesh.features);
-    let bv_osm_id = push_bv_aligned(
+    let bv_feature_id = push_bv_aligned(
         &mut bin,
         &mut buffer_views,
-        i64_bytes(&cols.osm_id),
+        u64_bytes(&cols.feature_id),
         None,
         8,
     );
@@ -108,10 +108,29 @@ pub fn write_glb(mesh: &Mesh, enu_to_ecef: [f64; 16]) -> Vec<u8> {
         f32_bytes(&cols.min_height),
         None,
     );
-    let bv_levels = push_bv(&mut bin, &mut buffer_views, u16_bytes(&cols.levels), None);
+    let bv_roof_height = push_bv(
+        &mut bin,
+        &mut buffer_views,
+        f32_bytes(&cols.roof_height),
+        None,
+    );
+    let bv_ground_elev = push_bv(
+        &mut bin,
+        &mut buffer_views,
+        f32_bytes(&cols.ground_elev),
+        None,
+    );
+    let bv_num_floors = push_bv(
+        &mut bin,
+        &mut buffer_views,
+        u16_bytes(&cols.num_floors),
+        None,
+    );
+    let bv_gers_id = push_string_column(&mut bin, &mut buffer_views, &cols.gers_id);
     let bv_name = push_string_column(&mut bin, &mut buffer_views, &cols.name);
-    let bv_kind = push_string_column(&mut bin, &mut buffer_views, &cols.kind);
-    let bv_building = push_string_column(&mut bin, &mut buffer_views, &cols.building);
+    let bv_subtype = push_string_column(&mut bin, &mut buffer_views, &cols.subtype);
+    let bv_class = push_string_column(&mut bin, &mut buffer_views, &cols.class);
+    let bv_roof_shape = push_string_column(&mut bin, &mut buffer_views, &cols.roof_shape);
 
     let feat_count = mesh.features.len();
     let bbox = aabb(&mesh.positions);
@@ -176,13 +195,17 @@ pub fn write_glb(mesh: &Mesh, enu_to_ecef: [f64; 16]) -> Vec<u8> {
                         "building": {
                             "name": "Building",
                             "properties": {
-                                "osm_id":     { "type": "SCALAR", "componentType": "INT64",   "required": false, "noData": 0 },
-                                "name":       { "type": "STRING", "required": false, "noData": "" },
-                                "kind":       { "type": "STRING", "required": false, "noData": "" },
-                                "building":   { "type": "STRING", "required": false, "noData": "" },
-                                "height":     { "type": "SCALAR", "componentType": "FLOAT32", "required": true },
-                                "min_height": { "type": "SCALAR", "componentType": "FLOAT32", "required": true },
-                                "levels":     { "type": "SCALAR", "componentType": "UINT16",  "required": false, "noData": 0 }
+                                "feature_id":  { "type": "SCALAR", "componentType": "UINT64",  "required": false, "noData": 0 },
+                                "gers_id":     { "type": "STRING", "required": false, "noData": "" },
+                                "name":        { "type": "STRING", "required": false, "noData": "" },
+                                "subtype":     { "type": "STRING", "required": false, "noData": "" },
+                                "class":       { "type": "STRING", "required": false, "noData": "" },
+                                "height":      { "type": "SCALAR", "componentType": "FLOAT32", "required": true },
+                                "min_height":  { "type": "SCALAR", "componentType": "FLOAT32", "required": true },
+                                "roof_height": { "type": "SCALAR", "componentType": "FLOAT32", "required": false, "noData": 0.0 },
+                                "ground_elev": { "type": "SCALAR", "componentType": "FLOAT32", "required": false, "noData": 0.0 },
+                                "num_floors":  { "type": "SCALAR", "componentType": "UINT16",  "required": false, "noData": 0 },
+                                "roof_shape":  { "type": "STRING", "required": false, "noData": "" }
                             }
                         }
                     }
@@ -192,13 +215,17 @@ pub fn write_glb(mesh: &Mesh, enu_to_ecef: [f64; 16]) -> Vec<u8> {
                     "class": "building",
                     "count": feat_count,
                     "properties": {
-                        "osm_id":     { "values": bv_osm_id },
-                        "name":       { "values": bv_name.values, "stringOffsets": bv_name.string_offsets, "stringOffsetType": "UINT32" },
-                        "kind":       { "values": bv_kind.values, "stringOffsets": bv_kind.string_offsets, "stringOffsetType": "UINT32" },
-                        "building":   { "values": bv_building.values, "stringOffsets": bv_building.string_offsets, "stringOffsetType": "UINT32" },
-                        "height":     { "values": bv_height },
-                        "min_height": { "values": bv_min_height },
-                        "levels":     { "values": bv_levels }
+                        "feature_id":  { "values": bv_feature_id },
+                        "gers_id":     { "values": bv_gers_id.values, "stringOffsets": bv_gers_id.string_offsets, "stringOffsetType": "UINT32" },
+                        "name":        { "values": bv_name.values, "stringOffsets": bv_name.string_offsets, "stringOffsetType": "UINT32" },
+                        "subtype":     { "values": bv_subtype.values, "stringOffsets": bv_subtype.string_offsets, "stringOffsetType": "UINT32" },
+                        "class":       { "values": bv_class.values, "stringOffsets": bv_class.string_offsets, "stringOffsetType": "UINT32" },
+                        "height":      { "values": bv_height },
+                        "min_height":  { "values": bv_min_height },
+                        "roof_height": { "values": bv_roof_height },
+                        "ground_elev": { "values": bv_ground_elev },
+                        "num_floors":  { "values": bv_num_floors },
+                        "roof_shape":  { "values": bv_roof_shape.values, "stringOffsets": bv_roof_shape.string_offsets, "stringOffsetType": "UINT32" }
                     }
                 }]
             }
@@ -348,25 +375,33 @@ fn round_up(n: usize, align: usize) -> usize {
 
 #[derive(Default)]
 struct Columns {
-    osm_id: Vec<i64>,
+    feature_id: Vec<u64>,
     height: Vec<f32>,
     min_height: Vec<f32>,
-    levels: Vec<u16>,
+    roof_height: Vec<f32>,
+    ground_elev: Vec<f32>,
+    num_floors: Vec<u16>,
+    gers_id: Vec<String>,
     name: Vec<String>,
-    kind: Vec<String>,
-    building: Vec<String>,
+    subtype: Vec<String>,
+    class: Vec<String>,
+    roof_shape: Vec<String>,
 }
 
 fn collect_columns(features: &[FeatureProps]) -> Columns {
     let mut c = Columns::default();
     for f in features {
-        c.osm_id.push(f.osm_id.unwrap_or(0));
+        c.feature_id.push(f.feature_id.unwrap_or(0));
         c.height.push(f.height_m);
         c.min_height.push(f.min_height_m);
-        c.levels.push(f.levels);
+        c.roof_height.push(f.roof_height_m);
+        c.ground_elev.push(f.ground_elev_m);
+        c.num_floors.push(f.num_floors);
+        c.gers_id.push(f.gers_id.clone().unwrap_or_default());
         c.name.push(f.name.clone().unwrap_or_default());
-        c.kind.push(f.kind.clone().unwrap_or_default());
-        c.building.push(f.building.clone().unwrap_or_default());
+        c.subtype.push(f.subtype.clone().unwrap_or_default());
+        c.class.push(f.class.clone().unwrap_or_default());
+        c.roof_shape.push(f.roof_shape.clone().unwrap_or_default());
     }
     c
 }
@@ -449,10 +484,10 @@ fn u16_bytes(v: &[u16]) -> Vec<u8> {
     }
     out
 }
-fn i64_bytes(v: &[i64]) -> Vec<u8> {
+fn u64_bytes(v: &[u64]) -> Vec<u8> {
     let mut out = Vec::with_capacity(v.len() * 8);
     for x in v {
-        out.write_i64::<LittleEndian>(*x).unwrap();
+        out.write_u64::<LittleEndian>(*x).unwrap();
     }
     out
 }

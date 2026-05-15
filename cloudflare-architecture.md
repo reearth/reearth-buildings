@@ -5,6 +5,8 @@ Re:Earth Terrain / Re:Earth Buildings の配信基盤を **Cloudflare Workers + 
 - 想定読者：本プロジェクトを実装・運用するエンジニア
 - 関連ドキュメント：[Re:Earthデータ配信戦略（企画書）](https://www.notion.so/eukarya/Re-Earth-35f16e0fb165800c8744d1291dc1f19a)
 
+> **2026-05 更新**：データソースを Protomaps OSM PMTiles → **Overture Maps Buildings PMTiles** に置換。地面標高は EGM2008 の自前 COG → **Re:Earth Terrain（terrain.reearth.land/terrarium/ellipsoid/{z}/{x}/{y}.webp）** をオンデマンド取得して建物中心点でサンプル。これに伴い R2 のジオイド COG と `egm.ts`/`cog.ts` は廃止。以下の本文には旧記述（Protomaps / EGM）が残っている箇所があるが、考え方は同じ（外部公開エンドポイントを Worker から直参照）。
+
 ---
 
 ## 1. 設計方針
@@ -40,8 +42,8 @@ Re:Earth Terrain / Re:Earth Buildings の配信基盤を **Cloudflare Workers + 
 
 1. **バッチ処理ゼロ運用**：事前タイル化・定期同期ジョブは一切持たない。すべてオンデマンドでリクエスト時に生成
 2. **タイル単位で決定論的生成**：同じ入力→同じ出力。キャッシュ最大化
-3. **PMTiles は外部公開エンドポイントを直参照**：Protomaps の `build.protomaps.com` を Worker から HTTP Range で読む。自前でミラーしない
-4. **DEM のみ R2 に静的アップロード**（更新頻度が低いので初期アップロードのみ）
+3. **PMTiles は外部公開エンドポイントを直参照**：Overture の `overturemaps-tiles-us-west-2-beta.s3.amazonaws.com/{RELEASE}/buildings.pmtiles` を Worker から HTTP Range で読む。自前でミラーしない
+4. **地面標高も外部直参照**：Re:Earth Terrain の Terrarium WebP を出力タイルと同じ (z, x, y) で fetch、WASM 内で建物中心点を bilinear サンプル。R2 にジオイドや DEM を持たない
 5. **書き込みは生成キャッシュのみ**：R2 への書き込みはレンダリング結果のキャッシュ用途のみ
 6. **Worker は薄く、計算は WASM に集中**：JavaScript 層は最小化
 7. **失敗時は503で正直に**：30sタイムアウトに当たったらリトライさせる
@@ -238,9 +240,8 @@ GET /14/14552/6451.glb
 
 | ソース | 所在 | 取り扱い |
 |---|---|---|
-| OSM建物 PMTiles | **`build.protomaps.com/{YYYYMMDD}.pmtiles`（Protomaps公開）** | Worker から HTTP Range で直接読む。自前ミラーしない |
-| DEM COG | 自前 R2 `/sources/dem/` | プロジェクト開始時に1回アップロード。更新は手動 |
-| ジオイド COG | 自前 R2 `/sources/geoid/egm2008.tif` | 同上、不変 |
+| 建物 PMTiles | **`overturemaps-tiles-us-west-2-beta.s3.amazonaws.com/{RELEASE}/buildings.pmtiles`（Overture公開）** | Worker から HTTP Range で直接読む。自前ミラーしない。月次リリースを S3 ListBucket で自動探索 |
+| 地面標高 | **`terrain.reearth.land/terrarium/ellipsoid/{z}/{x}/{y}.webp`（Re:Earth Terrain）** | 出力タイルと同じ (z, x, y) を fetch、WASM 内で WebP デコード→建物中心 bilinear サンプル。値は楕円体高（EGM2008 を blend 済み） |
 
 → **定期同期ジョブ・cron・GitHub Actions ワークフロー一切不要**。
 

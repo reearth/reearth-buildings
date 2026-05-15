@@ -15,7 +15,6 @@
     "deploy:prod": "pnpm run build:wasm && wrangler deploy --env prod"
   },
   "dependencies": {
-    "geotiff": "^3.0.5",
     "hono": "^4.6.0",
     "pmtiles": "^4.3.0"
   },
