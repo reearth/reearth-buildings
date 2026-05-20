@@ -23,3 +23,9 @@ CACHE_DISABLED = ""
 [[r2_buckets]]
 binding = "CACHE"
 bucket_name = "reearth-buildings"
+
+# Dense central-Tokyo tiles at z=12 blow past the default 50 ms CPU
+# budget (Cloudflare error 1102). Workers Paid permits up to 30 s; set
+# the ceiling explicitly so the worker can spend it on the heaviest tiles.
+[limits]
+cpu_ms = 30000

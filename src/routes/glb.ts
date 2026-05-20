@@ -38,16 +38,16 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
 
   const release = await currentPmtilesDate();
 
-  // Fetch the source MVTs that contribute to this output tile.
-  const sourceCoords = childCoordsAtZ(z, x, y, MAX_Z);
-  const sourceTiles: SourceTile[] = [];
-  for (const sc of sourceCoords) {
-    const mvt = await fetchBuildingsMvt(release, sc.z, sc.x, sc.y);
-    if (mvt) sourceTiles.push({ mvt, z: sc.z, x: sc.x, y: sc.y });
-  }
-  if (sourceTiles.length === 0) {
+  // Fetch the single source MVT at the same coord. Overture's
+  // buildings.pmtiles ships pre-generalized tiles at every zoom up to
+  // MAX_Z, so we let the upstream do the per-zoom thinning instead of
+  // aggregating 16 z=14 children into a z=12 output — that fan-in blew
+  // past the Workers CPU budget on dense central-Tokyo tiles.
+  const mvt = await fetchBuildingsMvt(release, z, x, y);
+  if (!mvt) {
     return c.text("tile out of source coverage", 404);
   }
+  const sourceTiles: SourceTile[] = [{ mvt, z, x, y }];
 
   const filter = areaFilterFor(z);
   const simplify = simplifyFor(z);
@@ -103,19 +103,6 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
   const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, aabbOnly, terrainTile);
   return new Response(glb, { headers });
 };
-
-/** Tile coords of the descendants at zoom `targetZ` that fully cover (z, x, y). */
-function childCoordsAtZ(z: number, x: number, y: number, targetZ: number) {
-  if (targetZ < z) return [];
-  const f = 2 ** (targetZ - z);
-  const result: Array<{ z: number; x: number; y: number }> = [];
-  for (let dx = 0; dx < f; dx++) {
-    for (let dy = 0; dy < f; dy++) {
-      result.push({ z: targetZ, x: x * f + dx, y: y * f + dy });
-    }
-  }
-  return result;
-}
 
 /** Stable fingerprint covering inputs + filter + output coord + terrain. */
 async function hashSources(
