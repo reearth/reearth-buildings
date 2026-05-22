@@ -1,6 +1,5 @@
 name = "reearth-buildings"
 main = "src/index.ts"
-account_id = "6bec0134af3a47eff814c2581f42993f"
 compatibility_date = "2025-05-01"
 workers_dev = false
 routes = [{ pattern = "buildings.reearth.land", custom_domain = true }]
