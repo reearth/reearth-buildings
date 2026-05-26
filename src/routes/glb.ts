@@ -43,7 +43,18 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
   // MAX_Z, so we let the upstream do the per-zoom thinning instead of
   // aggregating 16 z=14 children into a z=12 output — that fan-in blew
   // past the Workers CPU budget on dense central-Tokyo tiles.
-  const mvt = await fetchBuildingsMvt(release, z, x, y);
+  // Upstream PMTiles is the dominant source of transient flakiness
+  // ("Network connection lost.", sporadic 5xx from S3). fetchWithRetry
+  // inside the range source already retries once; if it still fails we
+  // surface 503 + Retry-After so loaders (Cesium, MapLibre) retry the
+  // tile rather than burning the URL with a 500.
+  let mvt: Uint8Array | null;
+  try {
+    mvt = await fetchBuildingsMvt(release, z, x, y);
+  } catch (err) {
+    console.error("fetchBuildingsMvt failed", { z, x, y, err: String(err) });
+    return retryLater(c, "buildings upstream unavailable");
+  }
   if (!mvt) {
     return c.text("tile out of source coverage", 404);
   }
@@ -90,19 +101,56 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
 
   if (!noCache) {
     const r2Key = `cache/buildings/${IMPL_VERSION}/${hash}.glb`;
-    const cached = await c.env.CACHE.get(r2Key);
+    let cached: R2ObjectBody | null = null;
+    try {
+      cached = await c.env.CACHE.get(r2Key);
+    } catch (err) {
+      // R2 read errors are recoverable: fall through to regeneration.
+      console.error("R2 get failed", { r2Key, err: String(err) });
+    }
     if (cached) {
       return new Response(cached.body, { headers });
     }
-    const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, aabbOnly, terrainTile);
-    c.executionCtx.waitUntil(c.env.CACHE.put(r2Key, glb));
+    let glb: Uint8Array;
+    try {
+      glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, aabbOnly, terrainTile);
+    } catch (err) {
+      console.error("renderGlbWasm failed", { z, x, y, err: String(err) });
+      return retryLater(c, "renderer transient failure");
+    }
+    // The R2 write happens after the response is dispatched; the runtime
+    // sometimes raises "Network connection lost." here when the edge
+    // tears down the subrequest. Swallow it so it doesn't pollute the
+    // exception log — the next request will regenerate and re-cache.
+    c.executionCtx.waitUntil(
+      c.env.CACHE.put(r2Key, glb).catch((err) => {
+        console.error("R2 put failed", { r2Key, err: String(err) });
+      }),
+    );
     return new Response(glb, { headers });
   }
 
   // CACHE_DISABLED: always regenerate, never touch R2.
-  const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, aabbOnly, terrainTile);
-  return new Response(glb, { headers });
+  try {
+    const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, aabbOnly, terrainTile);
+    return new Response(glb, { headers });
+  } catch (err) {
+    console.error("renderGlbWasm failed (no-cache)", { z, x, y, err: String(err) });
+    return retryLater(c, "renderer transient failure");
+  }
 };
+
+function retryLater(c: Context<{ Bindings: Env }>, msg: string): Response {
+  return new Response(msg, {
+    status: 503,
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "retry-after": "2",
+      "cache-control": "no-store",
+      "access-control-allow-origin": "*",
+    },
+  });
+}
 
 /** Stable fingerprint covering inputs + filter + output coord + terrain. */
 async function hashSources(

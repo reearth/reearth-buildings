@@ -7,6 +7,8 @@
 // WGS84 ellipsoidal height (EGM2008 blended in upstream) — no separate
 // geoid lookup needed on our side.
 
+import { fetchWithRetry } from "./retry";
+
 const TERRAIN_BASE = "https://terrain.reearth.land/terrarium/ellipsoid";
 
 /**
@@ -23,7 +25,7 @@ export async function fetchTerrainWebp(
   y: number,
 ): Promise<Uint8Array | null> {
   const url = `${TERRAIN_BASE}/${z}/${x}/${y}.webp`;
-  const r = await fetch(url, {
+  const r = await fetchWithRetry(url, {
     cf: { cacheTtl: 86400, cacheEverything: true },
   } as RequestInit);
   if (r.status === 404) return null;

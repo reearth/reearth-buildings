@@ -1,4 +1,5 @@
 import { PMTiles, type RangeResponse, type Source } from "pmtiles";
+import { fetchWithRetry } from "./retry";
 import { upstreamUrl } from "./version";
 
 class RangeSource implements Source {
@@ -9,7 +10,11 @@ class RangeSource implements Source {
   }
 
   async getBytes(offset: number, length: number): Promise<RangeResponse> {
-    const resp = await fetch(this.url, {
+    // Cloudflare's subrequest pipeline occasionally surfaces transient
+    // "Network connection lost." / 5xx from upstream S3. One retry with a
+    // tiny backoff turns the dominant cause of random 500s on this worker
+    // into a silent recovery.
+    const resp = await fetchWithRetry(this.url, {
       headers: { Range: `bytes=${offset}-${offset + length - 1}` },
       cf: { cacheTtl: 86400, cacheEverything: true },
     } as RequestInit);
