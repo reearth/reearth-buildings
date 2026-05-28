@@ -1,4 +1,4 @@
-import { PMTiles, type RangeResponse, type Source } from "pmtiles";
+import { PMTiles, type RangeResponse, ResolvedValueCache, type Source } from "pmtiles";
 import { fetchWithRetry } from "./retry";
 import { upstreamUrl } from "./version";
 
@@ -41,7 +41,13 @@ const instances = new Map<string, PMTiles>();
 function pmtilesFor(release: string): PMTiles {
   let inst = instances.get(release);
   if (!inst) {
-    inst = new PMTiles(new RangeSource(upstreamUrl(release)));
+    // ResolvedValueCache caches only *successful* header/directory reads.
+    // PMTiles' default SharedPromiseCache caches the in-flight promise and
+    // never evicts it on rejection, so a single transient cold-start header
+    // fetch failure poisons the whole isolate: every concurrent and
+    // subsequent request awaits the same rejected promise and 503s until the
+    // isolate recycles. That's the "nothing loads until reload" symptom.
+    inst = new PMTiles(new RangeSource(upstreamUrl(release)), new ResolvedValueCache());
     instances.set(release, inst);
   }
   return inst;
