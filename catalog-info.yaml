@@ -1,0 +1,19 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: reearth-buildings
+  namespace: reearth
+  description: Re:Earth Buildings — OSM buildings → 3D Tiles 1.1 on Cloudflare Workers
+    + R2
+  annotations:
+    github.com/project-slug: reearth/reearth-buildings
+  links:
+  - url: https://github.com/reearth/reearth-buildings
+    title: GitHub
+    icon: github
+  tags:
+  - rust
+spec:
+  type: service
+  lifecycle: production
+  owner: reearth/cto-office
