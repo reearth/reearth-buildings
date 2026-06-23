@@ -28,7 +28,27 @@
 
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.141/Build/Cesium/Widgets/widgets.css" />
 <style>
-  html, body, #app { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
+  html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
+  #app { position: absolute; top: 0; bottom: 0; left: 0; right: 0; }
+  /* Split-screen compare: Cesium (top-down) on the left, MapLibre with the
+     raw Overture footprints on the right. */
+  #compare-pane {
+    position: absolute; top: 0; bottom: 0; right: 0; left: 50%;
+    display: none; border-left: 2px solid #2a3f55; z-index: 5;
+  }
+  #compare-map { position: absolute; inset: 0; }
+  #compare-label { top: 12px; right: 12px; pointer-events: none; }
+  #compare-label strong { color: #c95f3d; }
+  #compare-status { color: #5a6b7d; }
+  body.split #app { right: 50%; }
+  body.split #compare-pane { display: block; }
+  #btn-compare {
+    background: transparent; border: 1px solid #2a3f55; color: #2a3f55;
+    padding: 5px 10px; border-radius: 6px; font: inherit; cursor: pointer;
+    font-weight: 600;
+  }
+  #btn-compare:hover { background: #2a3f55; color: #f2efe8; }
+  #btn-compare.active { background: #2a3f55; color: #f2efe8; }
   /* Palette: Inverted Blueprint
      Base    #f2efe8 (paper ivory)
      Assort  #2a3f55 (slate blue)
@@ -141,6 +161,13 @@
 </head>
 <body>
 <div id="app"></div>
+<div id="compare-pane">
+  <div id="compare-map"></div>
+  <div id="compare-label" class="overlay">
+    <strong>Overture</strong> raw footprints
+    <span id="compare-status"></span>
+  </div>
+</div>
 <div id="status" class="overlay">
   <div><span class="pill" id="loaded">0</span>tiles loaded</div>
   <div><span class="pill" id="failed">0</span>tiles failed</div>
@@ -149,6 +176,7 @@
 <div id="toggle" class="overlay">
   <span class="title"><a href="/">Re:Earth Buildings</a></span>
   <button id="btn-get-started" type="button">Get Started</button>
+  <button id="btn-compare" type="button" title="Split-screen against the raw Overture footprints (top-down, camera synced)">Compare</button>
 </div>
 <div id="credit">
   <a class="gh" href="https://github.com/reearth/reearth-buildings" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository">
@@ -479,6 +507,226 @@ Terrain: <a href="https://terrain.reearth.land/" target="_blank" rel="noopener n
       }, 1500);
     });
   }
+
+  // ----- Compare split view (debug) -----
+  // Clicking "Compare" splits the screen: Cesium (left) drops to a
+  // straight-down nadir view with tilt locked, and a MapLibre map (right)
+  // renders the raw Overture `building` footprints via the pmtiles://
+  // protocol (proxied through /debug/overture.pmtiles). The two cameras
+  // are kept in sync both ways so you can pan/zoom either panel and watch
+  // the 3D Tiles output track the source footprints.
+  const btnCompare = document.getElementById("btn-compare");
+  const compareStatus = document.getElementById("compare-status");
+
+  const MPP0 = 40075016.686 / 512; // metres/pixel at zoom 0 on the equator
+  const D2R = Math.PI / 180;
+  const R2D = 180 / Math.PI;
+  const zoomForMpp = (mpp, lat) =>
+    Math.log2((MPP0 * Math.cos(lat * D2R)) / mpp);
+  const mppForZoom = (zoom, lat) =>
+    (MPP0 * Math.cos(lat * D2R)) / 2 ** zoom;
+  const fovy = () => {
+    const f = viewer.camera.frustum?.fovy;
+    return Number.isFinite(f) ? f : Math.PI / 3;
+  };
+
+  let map = null;
+  let splitActive = false;
+  let savedView = null; // camera state to restore when leaving split
+
+  // The two sides are kept in sync without re-entrancy flags: each direction
+  // is idempotent and only writes when the target would actually move by more
+  // than a sub-pixel epsilon. A propagated change lands within epsilon on the
+  // return trip, so it doesn't bounce back — this stays correct even when a
+  // sync is a no-op (which, under requestRenderMode, fires no postRender, so a
+  // flag cleared on the next render would get stuck on).
+
+  // Cesium → MapLibre: match the map's vertical ground extent (metres) to what
+  // the nadir camera sees, so both panels frame the same area.
+  function syncMapFromCesium() {
+    if (!map) return;
+    const carto = viewer.camera.positionCartographic;
+    const lon = carto.longitude * R2D;
+    const lat = carto.latitude * R2D;
+    const groundH = 2 * carto.height * Math.tan(fovy() / 2);
+    const mapH = map.getCanvas().clientHeight || 1;
+    const zoom = zoomForMpp(groundH / mapH, lat);
+    const bearing = Cesium.Math.toDegrees(viewer.camera.heading);
+    const cur = map.getCenter();
+    if (
+      Math.abs(lon - cur.lng) < 1e-6 &&
+      Math.abs(lat - cur.lat) < 1e-6 &&
+      Math.abs(zoom - map.getZoom()) < 2e-3 &&
+      Math.abs(bearing - map.getBearing()) < 2e-2
+    ) {
+      return; // already there — don't echo
+    }
+    map.jumpTo({ center: [lon, lat], zoom, bearing });
+  }
+
+  // MapLibre → Cesium: invert the same relation, forcing the camera nadir.
+  function syncCesiumFromMap() {
+    if (!map) return;
+    const c = map.getCenter();
+    const mapH = map.getCanvas().clientHeight || 1;
+    const groundH = mppForZoom(map.getZoom(), c.lat) * mapH;
+    const h = groundH / (2 * Math.tan(fovy() / 2));
+    const headingRad = Cesium.Math.toRadians(map.getBearing());
+    const carto = viewer.camera.positionCartographic;
+    if (
+      Math.abs(c.lng - carto.longitude * R2D) < 1e-6 &&
+      Math.abs(c.lat - carto.latitude * R2D) < 1e-6 &&
+      Math.abs(h - carto.height) < Math.max(0.5, h * 1e-3) &&
+      Math.abs(headingRad - viewer.camera.heading) < 5e-4
+    ) {
+      return; // already there — don't echo
+    }
+    viewer.camera.setView({
+      destination: Cesium.Cartesian3.fromDegrees(c.lng, c.lat, h),
+      orientation: { heading: headingRad, pitch: -Cesium.Math.PI_OVER_TWO, roll: 0 },
+    });
+  }
+
+  // Cesium fires no fine-grained "camera moved" event (camera.changed only
+  // trips past a coarse threshold), so poll on postRender — cheap, and with
+  // requestRenderMode it only fires when something actually drew.
+  viewer.scene.postRender.addEventListener(() => {
+    if (splitActive) syncMapFromCesium();
+  });
+
+  function onMapMove() {
+    if (splitActive) syncCesiumFromMap();
+  }
+
+  async function ensureMap() {
+    if (map) return map;
+    compareStatus.textContent = " — loading…";
+    // Lazy-load MapLibre + pmtiles only when compare is first opened.
+    const mlMod = await import("https://cdn.jsdelivr.net/npm/maplibre-gl@4/+esm");
+    const maplibregl = mlMod.default ?? mlMod;
+    const { Protocol } = await import("https://cdn.jsdelivr.net/npm/pmtiles@4/+esm");
+    if (!document.getElementById("maplibre-css")) {
+      const link = document.createElement("link");
+      link.id = "maplibre-css";
+      link.rel = "stylesheet";
+      link.href = "https://cdn.jsdelivr.net/npm/maplibre-gl@4/dist/maplibre-gl.css";
+      document.head.appendChild(link);
+    }
+    const protocol = new Protocol();
+    maplibregl.addProtocol("pmtiles", protocol.tile);
+
+    map = new maplibregl.Map({
+      container: "compare-map",
+      style: {
+        version: 8,
+        sources: {
+          // No basemap — Cesium gives the spatial context; the dark
+          // background keeps the raw footprints legible. ODbL data is
+          // OSM-derived, so attribute both.
+          overture: {
+            type: "vector",
+            url: "pmtiles://" + location.origin + "/debug/overture.pmtiles",
+            attribution:
+              "© OpenStreetMap contributors, Overture Maps Foundation (ODbL)",
+          },
+        },
+        layers: [
+          { id: "bg", type: "background", paint: { "background-color": "#161e29" } },
+          {
+            id: "ov-fill",
+            type: "fill",
+            source: "overture",
+            "source-layer": "building",
+            paint: { "fill-color": "#c95f3d", "fill-opacity": 0.9 },
+          },
+          {
+            id: "ov-line",
+            type: "line",
+            source: "overture",
+            "source-layer": "building",
+            paint: { "line-color": "#f2efe8", "line-width": 0.4 },
+          },
+        ],
+      },
+      // Stay 2D/top-down to mirror the Cesium nadir view.
+      pitch: 0,
+      maxPitch: 0,
+      pitchWithRotate: false,
+      attributionControl: { compact: true },
+    });
+    map.on("move", onMapMove);
+    map.on("error", (e) => console.warn("compare map error", e?.error ?? e));
+    await new Promise((res) => map.on("load", res));
+    compareStatus.textContent = "";
+    window.compareMap = map; // expose for debugging via DevTools console
+    return map;
+  }
+
+  async function enterSplit() {
+    document.body.classList.add("split");
+    btnCompare.classList.add("active");
+    viewer.resize();
+
+    // Drop to a straight-down view over whatever the camera is currently
+    // looking at, and lock tilt so it stays top-down while you drag.
+    savedView = {
+      destination: viewer.camera.positionWC.clone(),
+      heading: viewer.camera.heading,
+      pitch: viewer.camera.pitch,
+      roll: viewer.camera.roll,
+    };
+    const scene = viewer.scene;
+    const ctr = new Cesium.Cartesian2(
+      scene.canvas.clientWidth / 2,
+      scene.canvas.clientHeight / 2,
+    );
+    const ray = viewer.camera.getPickRay(ctr);
+    const ground = ray && scene.globe.pick(ray, scene);
+    const carto = ground
+      ? Cesium.Cartographic.fromCartesian(ground)
+      : viewer.camera.positionCartographic;
+    viewer.camera.setView({
+      destination: Cesium.Cartesian3.fromRadians(
+        carto.longitude,
+        carto.latitude,
+        viewer.camera.positionCartographic.height,
+      ),
+      orientation: { heading: viewer.camera.heading, pitch: -Cesium.Math.PI_OVER_TWO, roll: 0 },
+    });
+    scene.screenSpaceCameraController.enableTilt = false;
+
+    try {
+      await ensureMap();
+    } catch (err) {
+      console.error("compare init failed", err);
+      compareStatus.textContent = " — failed to load";
+      return;
+    }
+    map.resize();
+    splitActive = true;
+    // Seed the map from the (now nadir) camera.
+    syncMapFromCesium();
+  }
+
+  function exitSplit() {
+    splitActive = false;
+    document.body.classList.remove("split");
+    btnCompare.classList.remove("active");
+    viewer.scene.screenSpaceCameraController.enableTilt = true;
+    if (savedView) {
+      viewer.camera.setView({
+        destination: savedView.destination,
+        orientation: { heading: savedView.heading, pitch: savedView.pitch, roll: savedView.roll },
+      });
+      savedView = null;
+    }
+    viewer.resize();
+  }
+
+  btnCompare.addEventListener("click", () => {
+    if (splitActive) exitSplit();
+    else enterSplit();
+  });
 </script>
 </body>
 </html>

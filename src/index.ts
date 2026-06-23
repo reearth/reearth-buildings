@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { Env } from "./env";
+import { overturePmtilesProxy } from "./routes/debug";
 import { glbTile } from "./routes/glb";
 import { subTilesetJson, tilesetJson } from "./routes/tileset";
 
@@ -27,6 +28,11 @@ app.use(
 // `/` is served from public/index.html via the [assets] binding in
 // wrangler.toml — no Worker route needed.
 app.get("/healthz", (c) => c.text("ok"));
+
+// Debug-only: range proxy for the upstream Overture buildings.pmtiles, so
+// the viewer's "Compare" split view can render the raw footprints in
+// MapLibre via the pmtiles:// protocol. See routes/debug.ts.
+app.get("/debug/overture.pmtiles", overturePmtilesProxy);
 
 // Unversioned entry tileset. Skip the edge cache middleware so a deploy
 // that changes IMPL_VERSION takes effect immediately for browsers
