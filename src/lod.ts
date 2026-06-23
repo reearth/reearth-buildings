@@ -38,6 +38,23 @@ export const THRESHOLD_M2 = 2000;
 export const MEGA_M2 = 10000;
 
 /**
+ * Lower footprint floor (m²) for the smallest bucket. Overture's ML-derived
+ * footprints include a tail of degenerate sub-metre slivers (measured min in
+ * a dense Marunouchi z=14 tile: 0.235 m²) that render as invisible specks but
+ * still cost a vertex/metadata row each. z=MAX_Z is the only bucket that would
+ * carry them, so flooring it here drops them from every zoom.
+ *
+ * This is hygiene, not a fix for the "property table exceeds maximum texture
+ * size" warning Cesium logs on the densest tiles: those tiles legitimately
+ * hold ~17 k real buildings (>16384), and a floor low enough to keep real
+ * small buildings (~5 m²) only removes ~0.4 % — nowhere near enough to get
+ * under the cap. That warning is benign (it only disables GPU-side metadata
+ * access — style-by-property / metadata picking — which the viewer doesn't
+ * use; the InfoBox reads CPU-side metadata and is unaffected).
+ */
+export const MIN_FOOTPRINT_M2 = 5;
+
+/**
  * Whether the renderer should collapse each polygon to its axis-aligned
  * bounding box at this zoom.
  *
@@ -64,7 +81,7 @@ export function refineFor(z: number): "ADD" | "REPLACE" {
 
 export function areaFilterFor(z: number): { minM2: number; maxM2: number } {
   if (LOD_MODE === "add") {
-    if (z >= MAX_Z) return { minM2: 0, maxM2: THRESHOLD_M2 };
+    if (z >= MAX_Z) return { minM2: MIN_FOOTPRINT_M2, maxM2: THRESHOLD_M2 };
     if (z === MIN_Z) return { minM2: MEGA_M2, maxM2: 0 };
     // Intermediate (z=13 today): [THRESHOLD, MEGA).
     return { minM2: THRESHOLD_M2, maxM2: MEGA_M2 };
