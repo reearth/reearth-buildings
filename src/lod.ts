@@ -39,13 +39,19 @@ export const MEGA_M2 = 10000;
 
 /**
  * Whether the renderer should collapse each polygon to its axis-aligned
- * bounding box at this zoom. At the coarsest content level we want a
- * "block mesh" look — a few triangles per landmark — rather than a full
- * extruded façade. This is independent of REPLACE-mode mesh simplify
- * (which only kicks in when LOD_MODE = "replace").
+ * bounding box at this zoom.
+ *
+ * Disabled everywhere. The z=12 "block mesh" look used to AABB every mega
+ * landmark, but a tile-axis-aligned box fills in courtyards and circumscribes
+ * L-shaped / wing / arcade outlines — exactly the footprint shapes that
+ * cluster in dense landmark districts (Marunouchi / Tokyo Station), so those
+ * buildings rendered noticeably larger than their true footprint at the
+ * coarsest LOD. Mega landmarks are few per tile, so drawing the real outline
+ * at z=12 is affordable; keep the flag plumbed so a future LOD can re-enable
+ * AABB per zoom if needed.
  */
-export function aabbOnlyAt(z: number): boolean {
-  return z === MIN_Z;
+export function aabbOnlyAt(_z: number): boolean {
+  return false;
 }
 
 export function refineFor(z: number): "ADD" | "REPLACE" {
