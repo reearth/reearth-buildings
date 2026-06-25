@@ -47,6 +47,10 @@ pub struct BuildingFeature {
     pub num_floors_underground: Option<u32>,
     /// Overture `min_floor`. Currently informational only.
     pub min_floor: Option<u32>,
+    /// Overture `level` (storey index; negative = underground). Together with
+    /// `is_underground` this is the only explicit signal that a feature is a
+    /// below-ground structure. Both are sparse in Overture's JP coverage.
+    pub level: Option<i64>,
     /// Overture `roof_height` (metres).
     pub roof_height: Option<f64>,
     /// Overture `roof_shape` enum (flat, gabled, hipped, …).
@@ -74,6 +78,16 @@ pub struct BuildingFeature {
     /// GERS id (string). Stable across releases; useful for cross-data
     /// joins with Overture parquet.
     pub gers_id: Option<String>,
+}
+
+impl BuildingFeature {
+    /// True when Overture explicitly flags this as a below-ground structure
+    /// (`is_underground`, or a negative `level`). Overture's JP coverage tags
+    /// these only rarely and ships no usable depth, so the renderer drops the
+    /// flagged subset rather than extruding underground geometry above ground.
+    pub fn is_underground_structure(&self) -> bool {
+        self.is_underground == Some(true) || self.level.is_some_and(|l| l < 0)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -221,6 +235,7 @@ fn decode_feature(
             "num_floors" => feat.num_floors = value.as_u32(),
             "num_floors_underground" => feat.num_floors_underground = value.as_u32(),
             "min_floor" => feat.min_floor = value.as_u32(),
+            "level" => feat.level = value.as_i64(),
             "roof_shape" => feat.roof_shape = value.as_string(),
             "roof_material" => feat.roof_material = value.as_string(),
             "roof_color" => feat.roof_color = value.as_string(),
@@ -321,6 +336,16 @@ impl Value {
             Value::U64(v) => u32::try_from(*v).ok(),
             Value::F32(v) if v.is_finite() && *v >= 0.0 => Some(v.round() as u32),
             Value::F64(v) if v.is_finite() && *v >= 0.0 => Some(v.round() as u32),
+            Value::Str(s) => s.parse().ok(),
+            _ => None,
+        }
+    }
+    fn as_i64(&self) -> Option<i64> {
+        match self {
+            Value::I64(v) => Some(*v),
+            Value::U64(v) => i64::try_from(*v).ok(),
+            Value::F32(v) if v.is_finite() => Some(v.round() as i64),
+            Value::F64(v) if v.is_finite() => Some(v.round() as i64),
             Value::Str(s) => s.parse().ok(),
             _ => None,
         }

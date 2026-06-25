@@ -226,6 +226,11 @@ pub fn extract_buildings(
 
     for source in sources {
         for feat in &source.tile.buildings {
+            // Mirror build_mesh: skip explicitly-flagged underground structures
+            // so the optimizer evaluates the same set the renderer emits.
+            if feat.is_underground_structure() {
+                continue;
+            }
             let polygons = group_polygons(&feat.rings);
             for polygon in polygons {
                 let area = polygon_area_m2(&polygon, source, source.tile.extent) as f32;
@@ -385,6 +390,15 @@ pub fn build_mesh(
 
     for (src_idx, source) in sources.iter().enumerate() {
         for feat in &source.tile.buildings {
+            // Overture flags underground structures (subway malls, underground
+            // parking) only rarely — is_underground or a negative level — and
+            // ships no usable depth, so we can't bury them. Drop the flagged
+            // subset rather than extruding it above ground. Untagged
+            // underground (the vast majority) is indistinguishable from real
+            // buildings and unavoidably remains.
+            if feat.is_underground_structure() {
+                continue;
+            }
             let polygons = group_polygons(&feat.rings);
             if polygons.is_empty() {
                 continue;
