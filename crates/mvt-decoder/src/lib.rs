@@ -505,4 +505,30 @@ mod tests {
         let t = decode_buildings(&[]).unwrap();
         assert_eq!(t.buildings.len(), 0);
     }
+
+    #[test]
+    fn underground_detection() {
+        let plain = BuildingFeature::default();
+        assert!(!plain.is_underground_structure());
+
+        let flagged = BuildingFeature {
+            is_underground: Some(true),
+            ..Default::default()
+        };
+        assert!(flagged.is_underground_structure());
+
+        let below = BuildingFeature {
+            level: Some(-1),
+            ..Default::default()
+        };
+        assert!(below.is_underground_structure());
+
+        // level 0 / explicit false / above-ground are all kept.
+        let ground = BuildingFeature {
+            level: Some(0),
+            is_underground: Some(false),
+            ..Default::default()
+        };
+        assert!(!ground.is_underground_structure());
+    }
 }

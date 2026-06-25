@@ -861,3 +861,79 @@ pub fn simplify_mesh(mesh: &mut Mesh, ratio: f32, target_error_m: f32) {
 fn bytemuck_slice(v: &[f32]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v)) }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mvt_decoder::BuildingFeature;
+
+    /// A ~unit square (CCW in tile space → outer ring) with a usable height.
+    fn square(id: u64) -> BuildingFeature {
+        BuildingFeature {
+            id: Some(id),
+            rings: vec![vec![[0, 0], [100, 0], [100, 100], [0, 100], [0, 0]]],
+            height: Some(10.0),
+            ..Default::default()
+        }
+    }
+
+    fn build(buildings: Vec<BuildingFeature>) -> Mesh {
+        let tile = DecodedTile {
+            extent: 4096,
+            buildings,
+        };
+        let sources = [Source {
+            z: 14,
+            x: 0,
+            y: 0,
+            tile: &tile,
+        }];
+        let cfg = HeightConfig::default();
+        build_mesh(
+            14,
+            0,
+            0,
+            &sources,
+            AreaFilter {
+                min_m2: 0.0,
+                max_m2: 0.0,
+            },
+            false,
+            None,
+            &cfg,
+        )
+    }
+
+    #[test]
+    fn drops_flagged_underground_features() {
+        let mut ug_flag = square(2);
+        ug_flag.is_underground = Some(true);
+        let mut ug_level = square(3);
+        ug_level.level = Some(-1);
+
+        let mesh = build(vec![square(1), ug_flag, ug_level]);
+
+        let ids: Vec<_> = mesh.features.iter().map(|f| f.feature_id).collect();
+        assert_eq!(
+            ids,
+            vec![Some(1)],
+            "only the non-underground building should be emitted"
+        );
+    }
+
+    #[test]
+    fn keeps_above_ground_and_non_negative_level() {
+        let mut lvl0 = square(5);
+        lvl0.level = Some(0);
+        let mut ug_false = square(6);
+        ug_false.is_underground = Some(false);
+
+        let mesh = build(vec![square(4), lvl0, ug_false]);
+
+        assert_eq!(
+            mesh.features.len(),
+            3,
+            "level 0, is_underground=false, and unflagged buildings are all kept"
+        );
+    }
+}
