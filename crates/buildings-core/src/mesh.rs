@@ -1236,8 +1236,10 @@ mod tests {
 
     #[test]
     fn model_on_tags_and_clamps_metadata_less_buildings() {
-        let mut cfg = HeightConfig::default();
-        cfg.model = crate::height_config::ModelMode::On;
+        let cfg = HeightConfig {
+            model: crate::height_config::ModelMode::On,
+            ..Default::default()
+        };
 
         let mesh = build_with_cfg(&[bare(8, vec![ring(0, 0, 235)]), square(9)], &cfg);
 
@@ -1284,8 +1286,10 @@ mod tests {
             crate::height_config::ModelMode::Off,
             crate::height_config::ModelMode::On,
         ] {
-            let mut cfg = HeightConfig::default();
-            cfg.model = mode;
+            let cfg = HeightConfig {
+                model: mode,
+                ..Default::default()
+            };
 
             let mesh = build_with_cfg(&buildings, &cfg);
             let extracted = extract_with_cfg(&buildings, &cfg);
