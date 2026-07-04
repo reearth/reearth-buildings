@@ -238,7 +238,7 @@ fn urlencode(s: &str) -> String {
         if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') {
             out.push(c);
         } else {
-            out.push_str(&format!("%{:02X}", b));
+            out.push_str(&format!("%{b:02X}"));
         }
     }
     out
