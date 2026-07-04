@@ -1250,7 +1250,7 @@ mod tests {
         assert_eq!(modeled.height_method, "model");
         let m = crate::height_model::builtin();
         assert!(
-            modeled.height_m >= m.clamp_min_m && modeled.height_m <= m.clamp_max_m,
+            modeled.height_m >= m.model.clamp_min_m && modeled.height_m <= m.model.clamp_max_m,
             "model height {} outside clamp range",
             modeled.height_m
         );

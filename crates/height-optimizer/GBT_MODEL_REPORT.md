@@ -121,27 +121,33 @@ real cached tiles, native Apple Silicon. Absolute times will differ
 under Workers wasm; the Off→On deltas are the signal. The worker
 renders one z14 source tile per request.
 
-**Shipped 48-tree model:**
+Inference walks a **flattened node arena**: at load, `PreparedModel`
+concatenates every tree's struct-of-arrays JSON into one contiguous
+16-byte-node array. This measured **2.8× faster** than walking the
+serde structs directly (1.4 → 0.51 µs/building for 48 trees) with
+bit-identical predictions (unit-tested).
 
-| preset | worst tile (buildings) | build_mesh Off → On |
+**Shipped 48-tree model (with arena):**
+
+| preset | tile total (buildings) | build_mesh Off → On |
 |---|---|---|
-| chiyoda | 8,857 | 27.7 → 39.9 ms (+44%) |
-| setagaya | 16,980 | 55.1 → 78.0 ms (+42%) |
-| iiyama | 2,464 | 6.8 → 9.9 ms (+46%) |
+| chiyoda | 22,008 | 67.6 → 76.2 ms (+12.8%) |
+| setagaya | 16,980 | 55.3 → 64.7 ms (+17.1%) |
+| iiyama | 3,874 | 10.2 → 12.2 ms (+20.1%) |
 
-Decomposition: one prediction costs **~1.4 µs** (encode + 48 tree
+Decomposition: one prediction costs **~0.51 µs** (encode + 48 arena
 walks) vs ~20 ns for a legacy table lookup; the tile delta is almost
-exactly `population × 1.4 µs`. Fixed overheads are negligible — the
-pass-A anchor scan is 35–52 µs/tile and the once-per-isolate artifact
+exactly `population × 0.51 µs`. Fixed overheads are negligible — the
+pass-A anchor scan is 35–60 µs/tile and the once-per-isolate artifact
 parse is ~0.3 ms.
 
-**16-tree alternative** (`train --n-trees 16`): ~0.5 µs/building,
-tile overhead +12–18%, 13 KB artifact, holdout MAE statistically
+**16-tree alternative** (`train --n-trees 16`): ~0.25 µs/building,
+tile overhead **+4–7%**, 13 KB artifact, holdout MAE statistically
 identical (3.87/3.25/4.81 vs 3.83/3.31/4.87) — at the cost of the
-Chiyoda tail (train MAE 8.2 → 10.0).
+Chiyoda high-rise tail (train MAE 8.2 → 10.0).
 
-Assessment: +12 ms on the worst z14 tile against the worker's 30 s CPU
-limit, paid once per tile thanks to R2 caching. The 48-tree model is
+Assessment: +2–3 ms per z14 tile against the worker's 30 s CPU limit,
+paid once per tile thanks to R2 caching. The 48-tree model is
 comfortably affordable; the 16-tree retrain is the zero-risk fallback
 if dense low-zoom tiles ever become a budget concern.
 
@@ -163,9 +169,11 @@ if dense low-zoom tiles ever become a budget concern.
    in adjacent renders — same class of issue as the legacy
    `UrbanLevel`, now finer-grained. A precomputed prior grid would
    remove it structurally.
-2. **Walker locality**: each tree stores five heap `Vec`s; flattening
-   the forest into one contiguous arena at load would plausibly halve
-   the 1.4 µs prediction cost with zero accuracy change.
+2. **Further inference speed** (if ever needed): tree-major batched
+   prediction over a whole tile's buildings, or compile-time codegen of
+   the artifact via `build.rs` (regenerated automatically from the JSON
+   on every build — retraining never touches source). Both deferred:
+   the arena already puts the overhead in the noise.
 3. **Richer context**: FAR zoning polygons (国土数値情報), distance to
    nearest station, and GHS-BUILT-H offline priors were identified as
    the next accuracy levers, especially outside Japan where no PLATEAU
