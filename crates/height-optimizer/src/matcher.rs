@@ -5,7 +5,7 @@
 //! first Overture polygon whose AABB contains the PLATEAU centroid AND
 //! whose outer ring contains it.
 
-use crate::fetch_plateau::Building as PlateauBuilding;
+use crate::truth::Building as PlateauBuilding;
 use buildings_core::{coord::LonLat, ExtractedBuilding};
 use rstar::{primitives::GeomWithData, primitives::Rectangle, RTree, RTreeObject, AABB};
 

@@ -4,12 +4,15 @@ mod bbox;
 mod bench;
 mod cities;
 mod dataset;
+mod fetch_dutch_3dbag;
 mod fetch_overture;
 mod fetch_plateau;
 mod gbt;
 mod matcher;
 mod metrics;
+mod rd;
 mod report;
+mod truth;
 
 use anyhow::{Context, Result};
 use buildings_core::{mesh, HeightConfig};
@@ -28,8 +31,10 @@ struct Cli {
 enum Cmd {
     /// List the bundled city presets.
     Cities,
-    /// Dump per-building PLATEAU LOD1 truth as csv (lon,lat,h_m).
-    DumpPlateau {
+    /// Dump per-building truth as csv (lon,lat,h_m) from the preset's
+    /// configured source (PLATEAU or 3D BAG).
+    #[command(alias = "dump-plateau")]
+    DumpTruth {
         #[arg(long)]
         preset: String,
         #[arg(long)]
@@ -129,9 +134,9 @@ fn main() -> Result<()> {
         Cmd::Cities => {
             for c in cities::all() {
                 println!(
-                    "{:18} city={} bbox=[{:.4},{:.4},{:.4},{:.4}] -- {}",
+                    "{:18} truth={:14} bbox=[{:.4},{:.4},{:.4},{:.4}] -- {}",
                     c.name,
-                    c.city_code,
+                    c.truth.label(),
                     c.bbox.west,
                     c.bbox.south,
                     c.bbox.east,
@@ -140,13 +145,12 @@ fn main() -> Result<()> {
                 );
             }
         }
-        Cmd::DumpPlateau { preset, cache } => {
+        Cmd::DumpTruth { preset, cache } => {
             let city =
                 cities::get(&preset).ok_or_else(|| anyhow::anyhow!("unknown preset: {preset}"))?;
             let cache_dir = cache.unwrap_or_else(default_cache_dir);
-            let buildings =
-                fetch_plateau::fetch_lod1(city.city_code, &city.bbox, &cache_dir.join("plateau"))?;
-            eprintln!("fetched {} PLATEAU buildings", buildings.len());
+            let buildings = fetch_truth(city, &cache_dir)?;
+            eprintln!("fetched {} truth buildings", buildings.len());
             for b in &buildings {
                 println!(
                     "{:.7},{:.7},{:.2}",
@@ -447,9 +451,22 @@ struct PipelineResult {
 pub(crate) struct MatchedData {
     pub city_name: String,
     pub city_note: String,
-    pub truths: Vec<fetch_plateau::Building>,
+    pub truths: Vec<truth::Building>,
     /// Overture estimates whose centroid falls inside the preset bbox.
     pub estimates: Vec<buildings_core::ExtractedBuilding>,
+}
+
+/// Fetch ground-truth buildings for a preset from its configured source.
+/// `cache` is the cache root; each source memoises under its own subdir.
+fn fetch_truth(city: &cities::City, cache: &std::path::Path) -> Result<Vec<truth::Building>> {
+    match &city.truth {
+        cities::TruthSource::Plateau { city_code } => {
+            fetch_plateau::fetch_lod1(city_code, &city.bbox, &cache.join("plateau"))
+        }
+        cities::TruthSource::Bag3d => {
+            fetch_dutch_3dbag::fetch_truth(&city.bbox, &cache.join("3dbag"))
+        }
+    }
 }
 
 /// Fetch + decode + extract + bbox-filter one preset with the given config.
@@ -463,9 +480,9 @@ pub(crate) fn matched_data(
 ) -> Result<MatchedData> {
     let city = cities::get(preset).ok_or_else(|| anyhow::anyhow!("unknown preset: {preset}"))?;
 
-    eprintln!("== PLATEAU truth ({}) ==", city.name);
-    let truths = fetch_plateau::fetch_lod1(city.city_code, &city.bbox, &cache.join("plateau"))?;
-    eprintln!("PLATEAU buildings (in bbox, height>0): {}", truths.len());
+    eprintln!("== truth [{}] ({}) ==", city.truth.label(), city.name);
+    let truths = fetch_truth(city, cache)?;
+    eprintln!("truth buildings (in bbox, height>0): {}", truths.len());
 
     eprintln!("== Overture estimate ({}) ==", city.name);
     let raw = fetch_overture::fetch_bbox(release, &city.bbox, &cache.join("overture"))?;

@@ -15,6 +15,7 @@
 //!      no-data sentinel).
 
 use crate::bbox::BBox;
+use crate::truth::Building;
 use anyhow::{anyhow, Context, Result};
 use buildings_core::coord::LonLat;
 use rayon::prelude::*;
@@ -30,12 +31,6 @@ const ATTRIBUTES_BATCH: usize = 200;
 /// Whole-world spatial ID — returns every feature in the file regardless
 /// of geographic location.
 const WORLD_SID: &str = "0/0/0/0";
-
-#[derive(Debug, Clone)]
-pub struct Building {
-    pub centroid: LonLat,
-    pub measured_height_m: f32,
-}
 
 pub fn fetch_lod1(city_code: &str, bbox: &BBox, cache: &Path) -> Result<Vec<Building>> {
     std::fs::create_dir_all(cache).ok();
@@ -184,7 +179,7 @@ fn cache_path(cache: &Path, url: &str, ext: &str) -> PathBuf {
     cache.join(format!("{:016x}.{ext}", fnv1a(url)))
 }
 
-fn fnv1a(s: &str) -> u64 {
+pub(crate) fn fnv1a(s: &str) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in s.as_bytes() {
         h ^= *b as u64;

@@ -114,6 +114,32 @@ Known blemishes:
   trees 17–48 mostly refine Chiyoda's high-rise tail (train-side
   chiyoda MAE 10.0 → 8.2) without moving holdout error.
 
+### 3.1 Cross-country verification (Netherlands, 3D BAG)
+
+To measure transfer beyond Japan, five Dutch presets score against
+**3D BAG** truth (`b3_h_dak_50p − b3_h_maaiveld`, height above ground)
+fetched from the nationwide FlatCityBuf index by HTTP range reads.
+The model never saw non-Japanese data. Full breakdown:
+[report-model-v1-nl.md](report-model-v1-nl.md).
+
+| city | n | MAE | bias | <20% |
+|---|---:|---|---|---|
+| delft | 3048 | 2.48 → **1.74** | +1.06 → +0.68 | 50% → 47% |
+| amsterdam | 6310 | 7.62 → **4.48** | +4.08 → −3.52 | 19% → 23% |
+| rotterdam (CBD) | 2255 | 4.78 → 4.83 | +2.78 → −3.19 | 45% → 22% |
+| groningen | 5348 | 7.18 → **2.46** | +4.60 → −0.05 | 19% → 45% |
+| maastricht | 4141 | 6.98 → **3.09** | +2.44 → −1.54 | 16% → 37% |
+
+Four of five cities improve substantially — the location-free feature
+design transfers across countries. The systematic pattern: the model
+**under-predicts Dutch stock by ~3.5 m** (tall narrow terraced houses,
+a form absent from Japanese training data). Where the legacy tables
+over-shot badly (amsterdam, groningen) the model still wins by a wide
+margin; in rotterdam the baseline was only +2.8 m biased, so the swing
+to −3.2 m nets flat MAE and a worse <20% hit-rate. The obvious fix —
+adding a Dutch city to the training presets — is deliberately left as
+future work so these five cities remain a clean verification set.
+
 ## 4. Speed (on-demand cost)
 
 Measured with `cargo run --release -p height-optimizer -- bench` on
@@ -169,6 +195,10 @@ if dense low-zoom tiles ever become a budget concern.
    in adjacent renders — same class of issue as the legacy
    `UrbanLevel`, now finer-grained. A precomputed prior grid would
    remove it structurally.
+1a. **Dutch under-bias**: §3.1's ~−3.5 m systematic bias on NL stock
+   suggests a mixed-country training set (add one Dutch city to the
+   train presets, keep the rest as holdout) as the highest-value
+   accuracy follow-up.
 2. **Further inference speed** (if ever needed): tree-major batched
    prediction over a whole tile's buildings, or compile-time codegen of
    the artifact via `build.rs` (regenerated automatically from the JSON
