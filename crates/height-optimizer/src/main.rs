@@ -1,6 +1,7 @@
 //! Calibration CLI for the buildings-core height estimator.
 
 mod bbox;
+mod bench;
 mod cities;
 mod dataset;
 mod fetch_overture;
@@ -39,6 +40,21 @@ enum Cmd {
     DumpConfig {
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+    /// Benchmark on-demand height estimation speed: per-tile build_mesh
+    /// with the model Off vs On, plus per-building and per-isolate
+    /// component costs.
+    Bench {
+        /// Comma-separated preset names.
+        #[arg(long, default_value = "chiyoda,setagaya,iiyama")]
+        presets: String,
+        /// Timed runs per measurement (medians reported).
+        #[arg(long, default_value_t = 20)]
+        iterations: usize,
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        #[arg(long)]
+        release: Option<String>,
     },
     /// Evaluate one preset against a single config (default if --config
     /// is omitted).
@@ -145,6 +161,18 @@ fn main() -> Result<()> {
                 Some(p) => std::fs::write(&p, toml_str)
                     .with_context(|| format!("write {}", p.display()))?,
                 None => print!("{toml_str}"),
+            }
+        }
+        Cmd::Bench {
+            presets,
+            iterations,
+            cache,
+            release,
+        } => {
+            let cache_dir = cache.unwrap_or_else(default_cache_dir);
+            let release = resolve_release(release)?;
+            for name in presets.split(',').map(|s| s.trim()) {
+                bench::run(name, &release, &cache_dir, iterations)?;
             }
         }
         Cmd::Eval {
