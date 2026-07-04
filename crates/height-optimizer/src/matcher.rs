@@ -16,7 +16,6 @@ type Leaf = GeomWithData<Rectangle<[f64; 2]>, usize>;
 pub struct Pair<'a> {
     pub truth: &'a PlateauBuilding,
     pub estimate: &'a ExtractedBuilding,
-    pub residual_m: f32,
 }
 
 pub struct MatchResult<'a> {
@@ -65,7 +64,6 @@ pub fn match_buildings<'a>(
                 pairs.push(Pair {
                     truth: t,
                     estimate: est,
-                    residual_m: est.height_m - t.measured_height_m,
                 });
             }
             None => unmatched += 1,

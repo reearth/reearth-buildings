@@ -81,6 +81,46 @@ pub fn all() -> &'static [City] {
             },
             note: "small mountain town, low-rise",
         },
+        City {
+            // 八王子市 (Hachioji, Tokyo) — suburban terminal station.
+            name: "hachioji",
+            city_code: "13201",
+            // North side of Hachioji Station — mid-rise commercial +
+            // dense low-rise mix around the terminal.
+            bbox: BBox {
+                west: 139.332,
+                south: 35.655,
+                east: 139.348,
+                north: 35.668,
+            },
+            note: "suburban terminal station",
+        },
+        City {
+            // 金沢市 (Kanazawa, Ishikawa) — regional core.
+            name: "kanazawa",
+            city_code: "17201",
+            // Kanazawa Station to Korinbo — regional CBD spine.
+            bbox: BBox {
+                west: 136.647,
+                south: 36.560,
+                east: 136.663,
+                north: 36.573,
+            },
+            note: "regional core",
+        },
+        City {
+            // 高松市 (Takamatsu, Kagawa) — regional CBD.
+            name: "takamatsu",
+            city_code: "37201",
+            // Central arcades (Marugamemachi) + station-front CBD.
+            bbox: BBox {
+                west: 134.043,
+                south: 34.338,
+                east: 134.058,
+                north: 34.351,
+            },
+            note: "regional CBD",
+        },
     ]
 }
 
