@@ -1148,4 +1148,169 @@ mod tests {
             "level 0, is_underground=false, and unflagged buildings are all kept"
         );
     }
+
+    /// A square ring `side` tile-units wide with its corner at (x0, y0).
+    fn ring(x0: i32, y0: i32, side: i32) -> Vec<[i32; 2]> {
+        vec![
+            [x0, y0],
+            [x0 + side, y0],
+            [x0 + side, y0 + side],
+            [x0, y0 + side],
+            [x0, y0],
+        ]
+    }
+
+    /// A building with no height metadata at all: resolves via the
+    /// footprint heuristic (model Off) or the GBT model (On).
+    fn bare(id: u64, rings: Vec<Vec<[i32; 2]>>) -> BuildingFeature {
+        BuildingFeature {
+            id: Some(id),
+            rings,
+            ..Default::default()
+        }
+    }
+
+    fn build_with_cfg(buildings: &[BuildingFeature], cfg: &HeightConfig) -> Mesh {
+        let tile = DecodedTile {
+            extent: 4096,
+            buildings: buildings.to_vec(),
+        };
+        let sources = [Source {
+            z: 14,
+            x: 0,
+            y: 0,
+            tile: &tile,
+        }];
+        build_mesh(14, 0, 0, &sources, AreaFilter::default(), false, None, cfg)
+    }
+
+    fn extract_with_cfg(
+        buildings: &[BuildingFeature],
+        cfg: &HeightConfig,
+    ) -> Vec<ExtractedBuilding> {
+        let tile = DecodedTile {
+            extent: 4096,
+            buildings: buildings.to_vec(),
+        };
+        let sources = [Source {
+            z: 14,
+            x: 0,
+            y: 0,
+            tile: &tile,
+        }];
+        extract_buildings(&sources, cfg)
+    }
+
+    /// Regression pin for the first-fragment-area bug: a two-fragment
+    /// building whose merged area lands in a different footprint bucket
+    /// than a single fragment's area. The old build_mesh resolved from
+    /// the first fragment only and would emit the smaller bucket's
+    /// height.
+    #[test]
+    fn multi_fragment_height_resolves_from_merged_area() {
+        let cfg = HeightConfig::default();
+        // Two disjoint ~150 m² squares (~12 m side at this tile's
+        // latitude): each alone sits in the 60-200 m² bucket, merged
+        // ~300 m² crosses into the 200-800 m² bucket.
+        let b = bare(7, vec![ring(0, 0, 235), ring(1000, 0, 235)]);
+        let mesh = build_with_cfg(&[b], &cfg);
+
+        assert_eq!(mesh.features.len(), 1);
+        let f = &mesh.features[0];
+        assert_eq!(f.height_method, "footprint");
+
+        let merged = f.footprint_m2;
+        let h_merged = cfg.footprint.rural.lookup(merged);
+        let h_first = cfg.footprint.rural.lookup(merged / 2.0);
+        assert_ne!(
+            h_merged, h_first,
+            "test geometry must straddle a bucket boundary \
+             (merged {merged} m²); adjust ring sizes"
+        );
+        assert!(
+            (f.height_m - h_merged as f32).abs() < 1e-4,
+            "height {} must come from the merged area, not a fragment",
+            f.height_m
+        );
+    }
+
+    #[test]
+    fn model_on_tags_and_clamps_metadata_less_buildings() {
+        let mut cfg = HeightConfig::default();
+        cfg.model = crate::height_config::ModelMode::On;
+
+        let mesh = build_with_cfg(&[bare(8, vec![ring(0, 0, 235)]), square(9)], &cfg);
+
+        let by_id: std::collections::HashMap<_, _> =
+            mesh.features.iter().map(|f| (f.feature_id, f)).collect();
+
+        let modeled = by_id[&Some(8)];
+        assert_eq!(modeled.height_method, "model");
+        let m = crate::height_model::builtin();
+        assert!(
+            modeled.height_m >= m.clamp_min_m && modeled.height_m <= m.clamp_max_m,
+            "model height {} outside clamp range",
+            modeled.height_m
+        );
+
+        // Steps 1-2 still bypass the model entirely.
+        let explicit = by_id[&Some(9)];
+        assert_eq!(explicit.height_method, "explicit");
+        assert!((explicit.height_m - 10.0).abs() < 1e-4);
+    }
+
+    /// The parity firewall: the renderer (build_mesh) and the evaluator
+    /// (extract_buildings) must resolve identical heights for the same
+    /// input, in both model modes. Covers every cascade path plus a
+    /// multi-fragment building.
+    #[test]
+    fn build_mesh_and_extract_buildings_resolve_identical_heights() {
+        let mut with_floors = bare(11, vec![ring(0, 300, 100)]);
+        with_floors.num_floors = Some(3);
+        let mut with_class = bare(12, vec![ring(300, 300, 100)]);
+        with_class.class = Some("office".to_string());
+        let mut with_subtype = bare(13, vec![ring(600, 300, 100)]);
+        with_subtype.subtype = Some("residential".to_string());
+        let buildings = vec![
+            square(10),
+            with_floors,
+            with_class,
+            with_subtype,
+            bare(14, vec![ring(900, 300, 100)]),
+            bare(15, vec![ring(0, 700, 235), ring(1000, 700, 235)]),
+        ];
+
+        for mode in [
+            crate::height_config::ModelMode::Off,
+            crate::height_config::ModelMode::On,
+        ] {
+            let mut cfg = HeightConfig::default();
+            cfg.model = mode;
+
+            let mesh = build_with_cfg(&buildings, &cfg);
+            let extracted = extract_with_cfg(&buildings, &cfg);
+            assert_eq!(mesh.features.len(), buildings.len());
+            assert_eq!(extracted.len(), buildings.len());
+
+            let rendered: std::collections::HashMap<_, _> = mesh
+                .features
+                .iter()
+                .map(|f| (f.feature_id, (f.height_m, f.height_method)))
+                .collect();
+            for e in &extracted {
+                let (h, method) = rendered[&e.feature_id];
+                assert_eq!(
+                    method, e.height_method,
+                    "method skew for {:?} in {mode:?}",
+                    e.feature_id
+                );
+                assert!(
+                    (h - e.height_m).abs() < 1e-4,
+                    "height skew for {:?} in {mode:?}: render {h} vs extract {}",
+                    e.feature_id,
+                    e.height_m
+                );
+            }
+        }
+    }
 }
