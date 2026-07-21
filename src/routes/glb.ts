@@ -36,7 +36,16 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     return c.text(`only z=${MIN_Z}..${MAX_Z} is served`, 404);
   }
 
-  const release = await currentPmtilesDate();
+  // The release probe hits Overture's S3 ListBucket; like the tile fetches
+  // it can fail transiently (or persistently, as when the upstream bucket
+  // moved). Surface 503 + Retry-After instead of an uncaught 500.
+  let release: string;
+  try {
+    release = await currentPmtilesDate();
+  } catch (err) {
+    console.error("currentPmtilesDate failed", { err: String(err) });
+    return retryLater(c, "buildings upstream unavailable");
+  }
 
   // Fetch the single source MVT at the same coord. Overture's
   // buildings.pmtiles ships pre-generalized tiles at every zoom up to

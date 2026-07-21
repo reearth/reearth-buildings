@@ -1,4 +1,5 @@
 import { LOD_MODE } from "./lod";
+import { fetchWithRetry } from "./retry";
 
 /**
  * Bump when the renderer / glb schema changes. Lives in the URL prefix so
@@ -29,11 +30,16 @@ export const IMPL_VERSION = `${RENDERER_VERSION}-${LOD_MODE}`;
 
 /**
  * Where Overture Maps publishes the buildings PMTiles. Each release lives
- * under an immutable date prefix (e.g. `2026-01-21/`).
+ * under an immutable `tiles/<release>/` prefix (e.g. `tiles/2026-06-17.0/`).
+ * The former `overturemaps-tiles-us-west-2-beta` bucket was shut off
+ * (403 AllAccessDisabled) in July 2026.
  */
-const UPSTREAM_BUCKET = "https://overturemaps-tiles-us-west-2-beta.s3.amazonaws.com";
+const UPSTREAM_BUCKET = "https://overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com";
+const UPSTREAM_PREFIX = "tiles/";
 
-const LATEST_CACHE_URL = "https://cache.local/overture-latest";
+// v2: cache key bumped with the bucket move so a release string cached
+// against the old bucket layout can't poison the first day on the new one.
+const LATEST_CACHE_URL = "https://cache.local/overture-latest-v2";
 const LATEST_CACHE_TTL_SECONDS = 86400;
 
 /**
@@ -57,15 +63,15 @@ export async function currentPmtilesDate(): Promise<string> {
 
 /** Build the absolute upstream URL for a specific Overture release. */
 export function upstreamUrl(release: string): string {
-  return `${UPSTREAM_BUCKET}/${release}/buildings.pmtiles`;
+  return `${UPSTREAM_BUCKET}/${UPSTREAM_PREFIX}${release}/buildings.pmtiles`;
 }
 
 async function probeLatestRelease(): Promise<string> {
-  // S3 ListBucketV2 with delimiter=/ returns a CommonPrefixes entry for
-  // every release directory at the bucket root. They sort lexically into
-  // chronological order (yyyy-mm-dd...).
-  const listUrl = `${UPSTREAM_BUCKET}/?list-type=2&delimiter=%2F`;
-  const r = await fetch(listUrl, {
+  // S3 ListBucketV2 with delimiter=/ under the tiles/ prefix returns a
+  // CommonPrefixes entry for every release directory (`tiles/2026-06-17.0/`).
+  // They sort lexically into chronological order (yyyy-mm-dd.n).
+  const listUrl = `${UPSTREAM_BUCKET}/?list-type=2&delimiter=%2F&prefix=${encodeURIComponent(UPSTREAM_PREFIX)}`;
+  const r = await fetchWithRetry(listUrl, {
     cf: { cacheTtl: 3600, cacheEverything: true },
   } as RequestInit);
   if (!r.ok) {
@@ -75,24 +81,21 @@ async function probeLatestRelease(): Promise<string> {
   const releases: string[] = [];
   const re = /<Prefix>([^<]+?)\/<\/Prefix>/g;
   for (const m of xml.matchAll(re)) {
-    const p = m[1] ?? "";
-    // Releases are yyyy-mm-dd (with optional `-beta` suffix for the very
-    // first one). Anything that doesn't start with a 4-digit year is some
-    // other kind of prefix and should be ignored.
+    const p = (m[1] ?? "").slice(UPSTREAM_PREFIX.length);
+    // Releases are yyyy-mm-dd.n. Anything that doesn't start with a
+    // 4-digit date is some other kind of prefix and should be ignored.
     if (/^\d{4}-\d{2}-\d{2}/.test(p)) releases.push(p);
   }
   if (releases.length === 0) {
     throw new Error("no Overture releases found in bucket listing");
   }
-  // Lexical sort = chronological order for these prefixes; -beta sorts
-  // first under 2024-06-13 vs 2024-06-13-beta which is what we want
-  // (prefer the non-beta form when both exist on the same day).
+  // Lexical sort = chronological order for these prefixes.
   releases.sort();
-  // Filter out any beta-only entries that share a date with a stable one.
   const dateOf = (r: string) => r.slice(0, 10);
   const latest = releases[releases.length - 1] ?? "";
   const latestDate = dateOf(latest);
-  // Prefer the non-beta release for the latest date if both exist.
+  // Prefer a non-beta release for the latest date if both forms exist
+  // (a historical quirk of the old bucket; harmless to keep).
   for (let i = releases.length - 1; i >= 0; i--) {
     const r = releases[i] ?? "";
     if (dateOf(r) !== latestDate) break;

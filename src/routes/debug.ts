@@ -17,7 +17,13 @@ import { currentPmtilesDate, upstreamUrl } from "../version";
  * pmtiles.ts (Cloudflare caches the full object and serves sub-ranges).
  */
 export const overturePmtilesProxy = async (c: Context<{ Bindings: Env }>) => {
-  const release = await currentPmtilesDate();
+  let release: string;
+  try {
+    release = await currentPmtilesDate();
+  } catch (err) {
+    console.error("currentPmtilesDate failed", { err: String(err) });
+    return c.text("overture upstream unavailable", 502);
+  }
   const url = upstreamUrl(release);
 
   const range = c.req.header("range");
