@@ -1,0 +1,62 @@
+name: Smoke Test
+
+# Hourly black-box probe of the production endpoints. Catches upstream
+# breakage (e.g. the July 2026 Overture bucket shutdown surfaced as 500s
+# on every uncached tile) that unit tests and deploy-time CI can't see.
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: Probe production
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: healthz + viewer
+        run: |
+          set -euxo pipefail
+          curl -fsS -o /dev/null --retry 2 https://buildings.reearth.land/healthz
+          curl -fsS -o /dev/null --retry 2 https://buildings.reearth.land/
+
+      - name: tileset.json
+        run: |
+          set -euxo pipefail
+          curl -fsS --retry 2 -o tileset.json https://buildings.reearth.land/tileset.json
+          # Derive the current impl prefix (e.g. "v5-add") from the root
+          # content URI so a renderer version bump doesn't break the probe.
+          impl=$(python3 -c "import json; print(json.load(open('tileset.json'))['root']['content']['uri'].split('/')[1])")
+          echo "IMPL=$impl" >> "$GITHUB_ENV"
+
+      - name: glb tile generation
+        run: |
+          set -euxo pipefail
+          # Dense central-Tokyo tile — exercises the full pipeline:
+          # Overture release probe, PMTiles range reads, terrain fetch,
+          # WASM mesh generation. A 503 is the worker's retry-later
+          # answer, so give it a few attempts before calling it broken.
+          url="https://buildings.reearth.land/${IMPL}/14/14550/6448.glb"
+          for i in 1 2 3 4 5; do
+            code=$(curl -sS -o tile.glb -w '%{http_code}' "$url")
+            [ "$code" = "200" ] && break
+            echo "attempt $i: $code"
+            [ "$i" = "5" ] && { echo "tile still failing: $code"; exit 1; }
+            sleep 5
+          done
+          # 12-byte glb header: magic "glTF", version, total length.
+          [ "$(head -c 4 tile.glb)" = "glTF" ] || { echo "not a glb"; exit 1; }
+          [ "$(wc -c < tile.glb)" -gt 1000 ] || { echo "suspiciously small glb"; exit 1; }
+
+      - name: Notify Slack on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "SLACK_WEBHOOK_URL not configured; skipping notification"
+            exit 0
+          fi
+          curl -fsS -X POST -H 'Content-Type: application/json' \
+            -d "{\"text\":\":rotating_light: *buildings.reearth.land smoke test failed* — <${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|run #${GITHUB_RUN_NUMBER}>\"}" \
+            "$SLACK_WEBHOOK_URL"
