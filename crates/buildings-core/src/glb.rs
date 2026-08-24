@@ -38,11 +38,7 @@ pub fn write_glb(mesh: &Mesh, enu_to_ecef: [f64; 16]) -> Vec<u8> {
     let mut virtual_offset: usize = 0;
 
     // ---- compressed vertex/index buffer views ----
-    let pos_typed: Vec<[f32; 3]> = mesh
-        .positions
-        .chunks_exact(3)
-        .map(|c| [c[0], c[1], c[2]])
-        .collect();
+    let pos_typed: Vec<[f32; 3]> = mesh.positions.as_chunks::<3>().0.to_vec();
     let bv_pos = push_compressed_attributes(
         &mut bin,
         &mut buffer_views,
@@ -54,11 +50,7 @@ pub fn write_glb(mesh: &Mesh, enu_to_ecef: [f64; 16]) -> Vec<u8> {
         "NONE",
     );
 
-    let nrm_typed: Vec<[f32; 3]> = mesh
-        .normals
-        .chunks_exact(3)
-        .map(|c| [c[0], c[1], c[2]])
-        .collect();
+    let nrm_typed: Vec<[f32; 3]> = mesh.normals.as_chunks::<3>().0.to_vec();
     let bv_nrm = push_compressed_attributes(
         &mut bin,
         &mut buffer_views,
@@ -534,7 +526,7 @@ fn aabb(positions: &[f32]) -> Aabb {
     }
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
-    for v in positions.chunks_exact(3) {
+    for v in positions.as_chunks::<3>().0 {
         for i in 0..3 {
             if v[i] < min[i] {
                 min[i] = v[i];

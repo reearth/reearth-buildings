@@ -746,7 +746,7 @@ fn extrude_polygon(
             normals.extend_from_slice(&[0.0, 1.0, 0.0]);
             feature_ids.push(fid);
         }
-        for tri in roof_tris.chunks_exact(3) {
+        for tri in roof_tris.as_chunks::<3>().0 {
             indices.push(base + tri[0] as u32);
             indices.push(base + tri[1] as u32);
             indices.push(base + tri[2] as u32);
