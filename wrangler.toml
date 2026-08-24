@@ -26,6 +26,18 @@ bucket_name = "reearth-buildings"
 [observability]
 enabled = true
 
+# Tile-demand events, one per tile request, read by okibi so that something
+# outside this worker can warm what people actually ask for after a renderer
+# bump. IMPL_VERSION is the whole URL space, so a bump leaves every tile cold
+# at once and every first visitor pays a whole render.
+#
+# An Overture release is not that: the cache key is a content hash, so only
+# the tiles whose bytes moved go cold. See https://github.com/reearth/okibi
+# and okibi.epochs.json.
+[[analytics_engine_datasets]]
+binding = "TILE_DEMAND"
+dataset = "tile_demand_1"
+
 # Dense central-Tokyo tiles at z=12 blow past the default 50 ms CPU
 # budget (Cloudflare error 1102). Workers Paid permits up to 30 s; set
 # the ceiling explicitly so the worker can spend it on the heaviest tiles.

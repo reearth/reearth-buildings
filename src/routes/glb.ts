@@ -6,6 +6,7 @@ import { fetchBuildingsMvt } from "../pmtiles";
 import { fetchTerrainWebp } from "../terrain";
 import { IMPL_VERSION, withRelease } from "../version";
 import { type SourceTile, renderGlbWasm } from "../wasm";
+import { writeTileDemand } from "../okibi";
 
 /**
  * Content-addressable, LOD-aware tile delivery.
@@ -97,7 +98,17 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     "access-control-allow-origin": "*",
   } as const;
 
+  // A 304 is somebody asking for this tile and being told they already have
+  // it, which is demand like any other: the tile has to exist for the answer
+  // to be that.
+  const record = (
+    cacheStatus: "hit" | "miss",
+    genMs: number,
+    bytes: number,
+  ): void => writeTileDemand(c.env, c.req.raw, { z, x, y }, { cacheStatus, genMs, bytes });
+
   if (!noCache && c.req.header("if-none-match") === etag) {
+    record("hit", 0, 0);
     return new Response(null, { status: 304, headers });
   }
 
@@ -111,11 +122,14 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
       console.error("R2 get failed", { r2Key, err: String(err) });
     }
     if (cached) {
+      record("hit", 0, cached.size);
       return new Response(cached.body, { headers });
     }
     let glb: Uint8Array;
+    const startedAt = Date.now();
     try {
       glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, aabbOnly, terrainTile);
+      record("miss", Date.now() - startedAt, glb.byteLength);
     } catch (err) {
       console.error("renderGlbWasm failed", { z, x, y, err: String(err) });
       return retryLater(c, "renderer transient failure");
@@ -137,7 +151,13 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
 
   // CACHE_DISABLED: always regenerate, never touch R2.
   try {
+    const startedAt = Date.now();
     const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, aabbOnly, terrainTile);
+    // Still a miss, and still a request somebody made. The binding is absent
+    // wherever this var is set, so in practice this writes nothing — but a
+    // path that quietly stopped counting would be worse than one that counts
+    // and is never read.
+    record("miss", Date.now() - startedAt, glb.byteLength);
     // Inputs are dead now; see releaseSources.
     mvt = null;
     releaseSources(sourceTiles, terrainTile);

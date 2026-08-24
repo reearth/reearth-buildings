@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@reearth/okibi':
+        specifier: ^0.3.0
+        version: 0.3.0
       hono:
         specifier: ^4.6.0
         version: 4.12.18
@@ -448,6 +451,9 @@ packages:
   '@poppinss/exception@1.2.3':
     resolution: {integrity: sha512-dCED+QRChTVatE9ibtoaxc+WkdzOSjYTKi/+uacHWIsfodVfpsueo3+DKpgU5Px8qXjgmXkSvhXvSCz3fnP9lw==}
 
+  '@reearth/okibi@0.3.0':
+    resolution: {integrity: sha512-HORaDhGhRy/OYAHtPhp1b/eC19d88zp9F05H/a1b054hmPvf3HAmYWhdWkkdu8fDs/qc5H2rVGxnQ+Y46cGIRQ==}
+
   '@sindresorhus/is@7.2.0':
     resolution: {integrity: sha512-P1Cz1dWaFfR4IR+U13mqqiGsLFf1KbayybWwdd2vfctdV6hDpUkgCY0nKOLLTMSoRd/jJNjtbqzf13K8DCCXQw==}
     engines: {node: '>=18'}
@@ -834,6 +840,8 @@ snapshots:
       supports-color: 10.2.2
 
   '@poppinss/exception@1.2.3': {}
+
+  '@reearth/okibi@0.3.0': {}
 
   '@sindresorhus/is@7.2.0': {}
 

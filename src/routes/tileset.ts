@@ -10,6 +10,7 @@ import {
   refineFor,
 } from "../lod";
 import { tileRegion, toRad } from "../tile";
+import { writeMetaDemand } from "../okibi";
 import { IMPL_VERSION } from "../version";
 
 // World coverage via a lazy quadtree of external tilesets:
@@ -67,7 +68,14 @@ export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
   const noCache = cacheDisabled(c.env);
   const etag = `"${IMPL_VERSION}-root"`;
   const cc = noCache ? "no-store" : "public, max-age=60, must-revalidate";
+  // Every client asks for this before it asks for a tile, so okibi puts it at
+  // the head of a warm plan unconditionally — a cold root document is not one
+  // slow response, it is everyone's first paint.
+  const record = (cacheStatus: "hit" | "miss", bytes: number): void =>
+    writeMetaDemand(c.env, c.req.raw, "tileset.json", { cacheStatus, genMs: 0, bytes });
+
   if (!noCache && c.req.header("if-none-match") === etag) {
+    record("hit", 0);
     return new Response(null, {
       status: 304,
       headers: { etag, "cache-control": cc },
@@ -88,7 +96,12 @@ export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
   // them only a 304. When IMPL_VERSION moves the URL contents change,
   // the ETag changes, and clients pick up the new sub-tileset prefix
   // without needing a manual hard reload.
-  return jsonResponse(body, cc, etag);
+  const response = jsonResponse(body, cc, etag);
+  // Composed here rather than fetched, so nothing was generated and nothing
+  // was cached — but it was asked for, and warming it is what puts it in an
+  // edge cache before the morning's first client.
+  record("miss", Number(response.headers.get("content-length") ?? 0));
+  return response;
 };
 
 /** Versioned sub-tileset at (z, x, y). */
