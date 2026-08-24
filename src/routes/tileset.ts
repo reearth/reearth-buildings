@@ -9,8 +9,8 @@ import {
   geometricErrorFor,
   refineFor,
 } from "../lod";
-import { tileRegion, toRad } from "../tile";
 import { writeMetaDemand } from "../okibi";
+import { tileRegion, toRad } from "../tile";
 import { IMPL_VERSION } from "../version";
 
 // World coverage via a lazy quadtree of external tilesets:

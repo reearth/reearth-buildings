@@ -2,11 +2,11 @@ import type { Context } from "hono";
 import { type Env, cacheDisabled } from "../env";
 import { sha1Hex } from "../hash";
 import { MAX_Z, MIN_Z, aabbOnlyAt, areaFilterFor, simplifyFor } from "../lod";
+import { writeTileDemand } from "../okibi";
 import { fetchBuildingsMvt } from "../pmtiles";
 import { fetchTerrainWebp } from "../terrain";
 import { IMPL_VERSION, withRelease } from "../version";
 import { type SourceTile, renderGlbWasm } from "../wasm";
-import { writeTileDemand } from "../okibi";
 
 /**
  * Content-addressable, LOD-aware tile delivery.
@@ -101,11 +101,8 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
   // A 304 is somebody asking for this tile and being told they already have
   // it, which is demand like any other: the tile has to exist for the answer
   // to be that.
-  const record = (
-    cacheStatus: "hit" | "miss",
-    genMs: number,
-    bytes: number,
-  ): void => writeTileDemand(c.env, c.req.raw, { z, x, y }, { cacheStatus, genMs, bytes });
+  const record = (cacheStatus: "hit" | "miss", genMs: number, bytes: number): void =>
+    writeTileDemand(c.env, c.req.raw, { z, x, y }, { cacheStatus, genMs, bytes });
 
   if (!noCache && c.req.header("if-none-match") === etag) {
     record("hit", 0, 0);

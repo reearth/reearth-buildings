@@ -74,12 +74,7 @@ export function writeTileDemand(
 }
 
 /** The same, for a document with no coordinates. */
-export function writeMetaDemand(
-  env: Env,
-  request: Request,
-  id: string,
-  measured: Measured,
-): void {
+export function writeMetaDemand(env: Env, request: Request, id: string, measured: Measured): void {
   write(env, request, {
     tileset: TILESET,
     kind: "tileset",
