@@ -26,41 +26,54 @@ const BUFFER_VIRTUAL: usize = 1;
 
 /// Write a mesh into a glb. `enu_to_ecef` is column-major 4x4 affine applied
 /// at the root node, placing the tile in world ECEF.
-pub fn write_glb(mesh: &Mesh, enu_to_ecef: [f64; 16]) -> Vec<u8> {
+///
+/// Takes the mesh by value on purpose: a dense z=14 Tokyo tile carries
+/// ~15 MB of geometry and ~15 MB of per-feature metadata, and the worker
+/// runs inside a 128 MB isolate. Each input vector is released the moment
+/// it has been packed into `bin`, so the peak is the output buffer plus
+/// whatever is still waiting to be packed — not everything at once.
+pub fn write_glb(mut mesh: Mesh, enu_to_ecef: [f64; 16]) -> Vec<u8> {
     let pos_count = mesh.positions.len() / 3;
     let idx_count = mesh.indices.len();
     if pos_count == 0 || idx_count == 0 {
         return write_empty_glb(enu_to_ecef);
     }
 
-    let mut bin: Vec<u8> = Vec::new();
+    let feat_count = mesh.features.len();
+    let bbox = aabb(&mesh.positions);
+
+    // `bin` starts with a reserved gap that the glb header + JSON chunk is
+    // written into at the end (see `assemble`), so the finished file is the
+    // one buffer we filled here rather than a second full-size copy of it.
+    // Every recorded byteOffset is relative to `PREFIX_GAP`.
+    let mut bin: Vec<u8> = vec![0u8; PREFIX_GAP];
     let mut buffer_views: Vec<Value> = Vec::new();
     let mut virtual_offset: usize = 0;
 
     // ---- compressed vertex/index buffer views ----
-    let pos_typed: Vec<[f32; 3]> = mesh.positions.as_chunks::<3>().0.to_vec();
     let bv_pos = push_compressed_attributes(
         &mut bin,
         &mut buffer_views,
         &mut virtual_offset,
-        meshopt::encode_vertex_buffer(&pos_typed).expect("encode pos"),
+        meshopt::encode_vertex_buffer(mesh.positions.as_chunks::<3>().0).expect("encode pos"),
         12,
         pos_count,
         Some(34962),
         "NONE",
     );
+    mesh.positions = Vec::new();
 
-    let nrm_typed: Vec<[f32; 3]> = mesh.normals.as_chunks::<3>().0.to_vec();
     let bv_nrm = push_compressed_attributes(
         &mut bin,
         &mut buffer_views,
         &mut virtual_offset,
-        meshopt::encode_vertex_buffer(&nrm_typed).expect("encode nrm"),
+        meshopt::encode_vertex_buffer(mesh.normals.as_chunks::<3>().0).expect("encode nrm"),
         12,
         pos_count,
         Some(34962),
         "NONE",
     );
+    mesh.normals = Vec::new();
 
     let bv_idx = push_compressed_indices(
         &mut bin,
@@ -70,69 +83,57 @@ pub fn write_glb(mesh: &Mesh, enu_to_ecef: [f64; 16]) -> Vec<u8> {
         idx_count,
         Some(34963),
     );
+    mesh.indices = Vec::new();
     let virtual_total = virtual_offset;
 
     // feature_ids (u16) can't be encoded by meshopt — its vertex codec
     // asserts that stride is a multiple of 4. Leave it as a plain
     // bufferView; the 2-byte savings per vertex aren't worth widening
     // to u32 just to satisfy the encoder.
-    let bv_fid = push_bv_aligned(
-        &mut bin,
-        &mut buffer_views,
-        u16_bytes(&mesh.feature_ids),
-        Some(34962),
-        2,
-    );
+    let feature_ids = std::mem::take(&mut mesh.feature_ids);
+    let bv_fid = push_bv_with(&mut bin, &mut buffer_views, Some(34962), 2, |out| {
+        for v in &feature_ids {
+            out.write_u16::<LittleEndian>(*v).unwrap();
+        }
+    });
+    drop(feature_ids);
 
     // ---- uncompressed property-table buffer views (buffer 0, plain) ----
-    let cols = collect_columns(&mesh.features);
-    let bv_feature_id = push_bv_aligned(
-        &mut bin,
-        &mut buffer_views,
-        u64_bytes(&cols.feature_id),
-        None,
-        8,
-    );
-    let bv_height = push_bv(&mut bin, &mut buffer_views, f32_bytes(&cols.height), None);
-    let bv_source_height = push_bv(
-        &mut bin,
-        &mut buffer_views,
-        f32_bytes(&cols.source_height),
-        None,
-    );
-    let bv_min_height = push_bv(
-        &mut bin,
-        &mut buffer_views,
-        f32_bytes(&cols.min_height),
-        None,
-    );
-    let bv_roof_height = push_bv(
-        &mut bin,
-        &mut buffer_views,
-        f32_bytes(&cols.roof_height),
-        None,
-    );
-    let bv_ground_elev = push_bv(
-        &mut bin,
-        &mut buffer_views,
-        f32_bytes(&cols.ground_elev),
-        None,
-    );
-    let bv_num_floors = push_bv(
-        &mut bin,
-        &mut buffer_views,
-        u16_bytes(&cols.num_floors),
-        None,
-    );
-    let bv_gers_id = push_string_column(&mut bin, &mut buffer_views, &cols.gers_id);
-    let bv_name = push_string_column(&mut bin, &mut buffer_views, &cols.name);
-    let bv_subtype = push_string_column(&mut bin, &mut buffer_views, &cols.subtype);
-    let bv_class = push_string_column(&mut bin, &mut buffer_views, &cols.class);
-    let bv_roof_shape = push_string_column(&mut bin, &mut buffer_views, &cols.roof_shape);
-    let bv_height_method = push_string_column(&mut bin, &mut buffer_views, &cols.height_method);
-
-    let feat_count = mesh.features.len();
-    let bbox = aabb(&mesh.positions);
+    //
+    // Each column is written straight into `bin` from `mesh.features`.
+    // Materialising them as `Vec<T>` first (and `Vec<String>` for the text
+    // ones) used to duplicate the whole feature table before a single byte
+    // was packed.
+    let feats = &mesh.features;
+    let bv_feature_id = push_bv_with(&mut bin, &mut buffer_views, None, 8, |out| {
+        for f in feats {
+            out.write_u64::<LittleEndian>(f.feature_id.unwrap_or(0))
+                .unwrap();
+        }
+    });
+    let bv_height = push_f32_column(&mut bin, &mut buffer_views, feats, |f| f.height_m);
+    // 0 doubles as the schema's noData sentinel for "Overture had no
+    // height for this building".
+    let bv_source_height = push_f32_column(&mut bin, &mut buffer_views, feats, |f| {
+        f.source_height_m.unwrap_or(0.0)
+    });
+    let bv_min_height = push_f32_column(&mut bin, &mut buffer_views, feats, |f| f.min_height_m);
+    let bv_roof_height = push_f32_column(&mut bin, &mut buffer_views, feats, |f| f.roof_height_m);
+    let bv_ground_elev = push_f32_column(&mut bin, &mut buffer_views, feats, |f| f.ground_elev_m);
+    let bv_num_floors = push_bv_with(&mut bin, &mut buffer_views, None, 4, |out| {
+        for f in feats {
+            out.write_u16::<LittleEndian>(f.num_floors).unwrap();
+        }
+    });
+    let bv_gers_id = push_string_column(&mut bin, &mut buffer_views, feats, |f| opt(&f.gers_id));
+    let bv_name = push_string_column(&mut bin, &mut buffer_views, feats, |f| opt(&f.name));
+    let bv_subtype = push_string_column(&mut bin, &mut buffer_views, feats, |f| opt(&f.subtype));
+    let bv_class = push_string_column(&mut bin, &mut buffer_views, feats, |f| opt(&f.class));
+    let bv_roof_shape =
+        push_string_column(&mut bin, &mut buffer_views, feats, |f| opt(&f.roof_shape));
+    let bv_height_method =
+        push_string_column(&mut bin, &mut buffer_views, feats, |f| f.height_method);
+    mesh.features = Vec::new();
 
     let gltf = json!({
         "asset": { "version": "2.0", "generator": "reearth-buildings" },
@@ -187,7 +188,8 @@ pub fn write_glb(mesh: &Mesh, enu_to_ecef: [f64; 16]) -> Vec<u8> {
         ],
         "bufferViews": buffer_views,
         "buffers": [
-            { "byteLength": bin.len() },
+            // Payload only — `bin` also carries the reserved prefix gap.
+            { "byteLength": bin.len() - PREFIX_GAP },
             { "byteLength": virtual_total,
               "extensions": { "EXT_meshopt_compression": { "fallback": true } } }
         ],
@@ -240,11 +242,60 @@ pub fn write_glb(mesh: &Mesh, enu_to_ecef: [f64; 16]) -> Vec<u8> {
         }
     });
 
-    let mut json_bytes = serde_json::to_vec(&gltf).expect("json serialize");
+    let json_bytes = serde_json::to_vec(&gltf).expect("json serialize");
+    assemble(bin, json_bytes)
+}
+
+/// Bytes reserved at the front of `bin` for `[glb header][JSON chunk]`.
+///
+/// The JSON is a fixed schema plus a fixed 23 bufferView entries — ~5.3 KB,
+/// and it doesn't grow with the building count — so 8 KB always fits.
+/// Nothing downstream depends on the gap: bufferView byteOffsets are
+/// relative to the BIN chunk, which is why the prefix can be sized
+/// independently of the payload.
+const PREFIX_GAP: usize = 8 * 1024;
+
+/// Payload size from which filling the gap beats copying the file.
+///
+/// Using the gap means padding the JSON chunk out to fill it exactly
+/// (glTF §4.4.2: JSON chunks are space-padded, any length is valid), which
+/// costs ~2.7 KB of trailing spaces. That's noise next to a multi-MB
+/// central-Tokyo tile whose copy we're avoiding, and not worth paying on a
+/// sparse tile that a second buffer would hold comfortably anyway.
+const GAP_MIN_PAYLOAD: usize = 1024 * 1024;
+
+/// Write the glb header + JSON chunk into the gap `write_glb` left at the
+/// front of `bin`, and return the whole thing as the finished file.
+fn assemble(mut bin: Vec<u8>, mut json_bytes: Vec<u8>) -> Vec<u8> {
+    let bin_len = bin.len() - PREFIX_GAP;
+    // 12 B glb header + 8 B JSON chunk header + JSON + 8 B BIN chunk header.
+    let json_len = PREFIX_GAP.saturating_sub(12 + 8 + 8);
+    if json_bytes.len() > json_len || bin_len < GAP_MIN_PAYLOAD {
+        return assemble_copied(&bin[PREFIX_GAP..], json_bytes);
+    }
+    json_bytes.resize(json_len, b' ');
+
+    let total_len = PREFIX_GAP + bin_len;
+    let mut head = &mut bin[..PREFIX_GAP];
+    head.write_u32::<LittleEndian>(GLTF_MAGIC).unwrap();
+    head.write_u32::<LittleEndian>(VERSION).unwrap();
+    head.write_u32::<LittleEndian>(total_len as u32).unwrap();
+    head.write_u32::<LittleEndian>(json_len as u32).unwrap();
+    head.write_u32::<LittleEndian>(JSON_TYPE).unwrap();
+    head.write_all(&json_bytes).unwrap();
+    head.write_u32::<LittleEndian>(bin_len as u32).unwrap();
+    head.write_u32::<LittleEndian>(BIN_TYPE).unwrap();
+    debug_assert!(head.is_empty());
+    bin
+}
+
+/// Build the file as a second buffer: the payload is small enough that the
+/// copy is cheap (and a tight JSON chunk is nicer), or — never seen in
+/// practice — the JSON outgrew the reserved gap.
+fn assemble_copied(bin: &[u8], mut json_bytes: Vec<u8>) -> Vec<u8> {
     while !json_bytes.len().is_multiple_of(4) {
         json_bytes.push(b' ');
     }
-
     let total_len = 12 + 8 + json_bytes.len() + 8 + bin.len();
     let mut out = Vec::with_capacity(total_len);
     out.write_u32::<LittleEndian>(GLTF_MAGIC).unwrap();
@@ -256,7 +307,7 @@ pub fn write_glb(mesh: &Mesh, enu_to_ecef: [f64; 16]) -> Vec<u8> {
     out.write_all(&json_bytes).unwrap();
     out.write_u32::<LittleEndian>(bin.len() as u32).unwrap();
     out.write_u32::<LittleEndian>(BIN_TYPE).unwrap();
-    out.write_all(&bin).unwrap();
+    out.write_all(bin).unwrap();
     out
 }
 
@@ -299,9 +350,10 @@ fn push_compressed_attributes(
     target: Option<u32>,
     filter: &str,
 ) -> usize {
-    let real_offset = bin.len();
+    let real_offset = bin.len() - PREFIX_GAP;
     let real_len = compressed.len();
     bin.extend_from_slice(&compressed);
+    drop(compressed);
     pad_to(bin, 4);
 
     let uncompressed_len = byte_stride * count;
@@ -341,9 +393,10 @@ fn push_compressed_indices(
     count: usize,
     target: Option<u32>,
 ) -> usize {
-    let real_offset = bin.len();
+    let real_offset = bin.len() - PREFIX_GAP;
     let real_len = compressed.len();
     bin.extend_from_slice(&compressed);
+    drop(compressed);
     pad_to(bin, 4);
 
     // u32 indices → byteStride 4
@@ -379,47 +432,6 @@ fn round_up(n: usize, align: usize) -> usize {
     n.div_ceil(align) * align
 }
 
-// ---------------- column collection ----------------
-
-#[derive(Default)]
-struct Columns {
-    feature_id: Vec<u64>,
-    height: Vec<f32>,
-    source_height: Vec<f32>,
-    min_height: Vec<f32>,
-    roof_height: Vec<f32>,
-    ground_elev: Vec<f32>,
-    num_floors: Vec<u16>,
-    gers_id: Vec<String>,
-    name: Vec<String>,
-    subtype: Vec<String>,
-    class: Vec<String>,
-    roof_shape: Vec<String>,
-    height_method: Vec<String>,
-}
-
-fn collect_columns(features: &[FeatureProps]) -> Columns {
-    let mut c = Columns::default();
-    for f in features {
-        c.feature_id.push(f.feature_id.unwrap_or(0));
-        c.height.push(f.height_m);
-        // 0 doubles as the schema's noData sentinel for "Overture had no
-        // height for this building".
-        c.source_height.push(f.source_height_m.unwrap_or(0.0));
-        c.min_height.push(f.min_height_m);
-        c.roof_height.push(f.roof_height_m);
-        c.ground_elev.push(f.ground_elev_m);
-        c.num_floors.push(f.num_floors);
-        c.gers_id.push(f.gers_id.clone().unwrap_or_default());
-        c.name.push(f.name.clone().unwrap_or_default());
-        c.subtype.push(f.subtype.clone().unwrap_or_default());
-        c.class.push(f.class.clone().unwrap_or_default());
-        c.roof_shape.push(f.roof_shape.clone().unwrap_or_default());
-        c.height_method.push(f.height_method.to_string());
-    }
-    c
-}
-
 // ---------------- bin packers ----------------
 
 struct StringBv {
@@ -427,26 +439,28 @@ struct StringBv {
     string_offsets: usize,
 }
 
-fn push_bv(
-    bin: &mut Vec<u8>,
-    views: &mut Vec<Value>,
-    bytes: Vec<u8>,
-    target: Option<u32>,
-) -> usize {
-    push_bv_aligned(bin, views, bytes, target, 4)
+/// `""` for an absent optional string — the schema's noData sentinel.
+fn opt(s: &Option<String>) -> &str {
+    s.as_deref().unwrap_or("")
 }
 
-fn push_bv_aligned(
+/// Append a bufferView by writing its bytes directly into `bin`.
+///
+/// The `fill` closure appends the payload; the bufferView entry is derived
+/// from how far `bin` grew. Writing in place is what keeps a column from
+/// existing twice (once as `Vec<T>`, once as its little-endian bytes).
+fn push_bv_with(
     bin: &mut Vec<u8>,
     views: &mut Vec<Value>,
-    bytes: Vec<u8>,
     target: Option<u32>,
     align: usize,
+    fill: impl FnOnce(&mut Vec<u8>),
 ) -> usize {
     pad_to(bin, align);
-    let offset = bin.len();
-    let len = bytes.len();
-    bin.extend_from_slice(&bytes);
+    let offset = bin.len() - PREFIX_GAP;
+    let start = bin.len();
+    fill(bin);
+    let len = bin.len() - start;
     pad_to(bin, 4);
     let mut v = json!({
         "buffer": BUFFER_REAL,
@@ -461,49 +475,43 @@ fn push_bv_aligned(
     idx
 }
 
-fn push_string_column(bin: &mut Vec<u8>, views: &mut Vec<Value>, strings: &[String]) -> StringBv {
-    let mut values_bytes: Vec<u8> = Vec::new();
-    let mut offsets: Vec<u32> = Vec::with_capacity(strings.len() + 1);
+fn push_f32_column(
+    bin: &mut Vec<u8>,
+    views: &mut Vec<Value>,
+    features: &[FeatureProps],
+    get: impl Fn(&FeatureProps) -> f32,
+) -> usize {
+    push_bv_with(bin, views, None, 4, |out| {
+        for f in features {
+            out.write_f32::<LittleEndian>(get(f)).unwrap();
+        }
+    })
+}
+
+fn push_string_column(
+    bin: &mut Vec<u8>,
+    views: &mut Vec<Value>,
+    features: &[FeatureProps],
+    get: impl Fn(&FeatureProps) -> &str,
+) -> StringBv {
+    let mut offsets: Vec<u32> = Vec::with_capacity(features.len() + 1);
     offsets.push(0);
-    for s in strings {
-        values_bytes.extend_from_slice(s.as_bytes());
-        offsets.push(values_bytes.len() as u32);
-    }
-    let values_idx = push_bv(bin, views, values_bytes, None);
-    let offsets_idx = push_bv(bin, views, u32_bytes(&offsets), None);
+    let values_idx = push_bv_with(bin, views, None, 4, |out| {
+        let start = out.len();
+        for f in features {
+            out.extend_from_slice(get(f).as_bytes());
+            offsets.push((out.len() - start) as u32);
+        }
+    });
+    let offsets_idx = push_bv_with(bin, views, None, 4, |out| {
+        for o in &offsets {
+            out.write_u32::<LittleEndian>(*o).unwrap();
+        }
+    });
     StringBv {
         values: values_idx,
         string_offsets: offsets_idx,
     }
-}
-
-fn f32_bytes(v: &[f32]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(v.len() * 4);
-    for x in v {
-        out.write_f32::<LittleEndian>(*x).unwrap();
-    }
-    out
-}
-fn u32_bytes(v: &[u32]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(v.len() * 4);
-    for x in v {
-        out.write_u32::<LittleEndian>(*x).unwrap();
-    }
-    out
-}
-fn u16_bytes(v: &[u16]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(v.len() * 2);
-    for x in v {
-        out.write_u16::<LittleEndian>(*x).unwrap();
-    }
-    out
-}
-fn u64_bytes(v: &[u64]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(v.len() * 8);
-    for x in v {
-        out.write_u64::<LittleEndian>(*x).unwrap();
-    }
-    out
 }
 
 fn pad_to(buf: &mut Vec<u8>, align: usize) {
@@ -537,4 +545,84 @@ fn aabb(positions: &[f32]) -> Aabb {
         }
     }
     Aabb { min, max }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mesh::FeatureProps;
+
+    /// Split a glb into its JSON and BIN chunks, checking the framing.
+    fn chunks(glb: &[u8]) -> (Value, &[u8]) {
+        let u32_at = |o: usize| u32::from_le_bytes(glb[o..o + 4].try_into().unwrap()) as usize;
+        assert_eq!(&glb[0..4], b"glTF");
+        assert_eq!(u32_at(4), VERSION as usize);
+        assert_eq!(u32_at(8), glb.len(), "header total length");
+        let json_len = u32_at(12);
+        assert_eq!(u32_at(16), JSON_TYPE as usize);
+        assert!(json_len.is_multiple_of(4), "JSON chunk must be 4-aligned");
+        let json: Value = serde_json::from_slice(&glb[20..20 + json_len]).expect("JSON chunk");
+        let bin_off = 20 + json_len;
+        let bin_len = u32_at(bin_off);
+        assert_eq!(u32_at(bin_off + 4), BIN_TYPE as usize);
+        assert_eq!(bin_off + 8 + bin_len, glb.len(), "BIN chunk fills the file");
+        (json, &glb[bin_off + 8..])
+    }
+
+    /// A unit cube's worth of geometry, `feats` features deep.
+    fn mesh_with(verts: usize, feats: usize) -> Mesh {
+        Mesh {
+            positions: (0..verts * 3).map(|i| i as f32).collect(),
+            normals: (0..verts * 3).map(|_| 0.0).collect(),
+            feature_ids: (0..verts).map(|i| (i % feats.max(1)) as u16).collect(),
+            indices: (0..verts as u32).collect(),
+            features: (0..feats)
+                .map(|i| FeatureProps {
+                    feature_id: Some(i as u64),
+                    gers_id: Some(format!("gers-{i}")),
+                    height_m: 10.0,
+                    height_method: "explicit",
+                    ..Default::default()
+                })
+                .collect(),
+        }
+    }
+
+    /// The declared buffer length has to match the BIN chunk actually
+    /// written — they're computed in different places, and a mismatch is
+    /// invisible until a client tries to read past the end of a bufferView.
+    #[test]
+    fn declared_buffer_matches_bin_chunk() {
+        for (verts, feats) in [(24, 2), (300_000, 4_000)] {
+            let glb = write_glb(mesh_with(verts, feats), [0.0; 16]);
+            let (json, bin) = chunks(&glb);
+            assert_eq!(
+                json["buffers"][0]["byteLength"].as_u64().unwrap() as usize,
+                bin.len(),
+                "verts={verts}"
+            );
+            for v in json["bufferViews"].as_array().unwrap() {
+                if v["buffer"] == json!(BUFFER_REAL) {
+                    let end = v["byteOffset"].as_u64().unwrap() + v["byteLength"].as_u64().unwrap();
+                    assert!(end as usize <= bin.len(), "bufferView past BIN end: {v}");
+                }
+            }
+        }
+    }
+
+    /// Both assembly paths — the padded in-place one for big payloads and
+    /// the copying one for everything else — must produce the same framing.
+    #[test]
+    fn assemble_paths_agree() {
+        let json = br#"{"asset":{"version":"2.0"}}"#.to_vec();
+        for payload in [16usize, GAP_MIN_PAYLOAD + 4] {
+            let mut bin = vec![0u8; PREFIX_GAP];
+            bin.extend((0..payload).map(|i| i as u8));
+            let glb = assemble(bin, json.clone());
+            let (parsed, chunk) = chunks(&glb);
+            assert_eq!(parsed["asset"]["version"], json!("2.0"));
+            assert_eq!(chunk.len(), payload);
+            assert!(chunk.iter().enumerate().all(|(i, b)| *b == i as u8));
+        }
+    }
 }

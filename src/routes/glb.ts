@@ -120,6 +120,9 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
       console.error("renderGlbWasm failed", { z, x, y, err: String(err) });
       return retryLater(c, "renderer transient failure");
     }
+    // Inputs are dead now; see releaseSources.
+    mvt = null;
+    releaseSources(sourceTiles, terrainTile);
     // The R2 write happens after the response is dispatched; the runtime
     // sometimes raises "Network connection lost." here when the edge
     // tears down the subrequest. Swallow it so it doesn't pollute the
@@ -135,12 +138,29 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
   // CACHE_DISABLED: always regenerate, never touch R2.
   try {
     const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, aabbOnly, terrainTile);
+    // Inputs are dead now; see releaseSources.
+    mvt = null;
+    releaseSources(sourceTiles, terrainTile);
     return new Response(glb, { headers });
   } catch (err) {
     console.error("renderGlbWasm failed (no-cache)", { z, x, y, err: String(err) });
     return retryLater(c, "renderer transient failure");
   }
 };
+
+/**
+ * Drop the render inputs the moment the glb exists.
+ *
+ * A dense z=14 Tokyo MVT is ~6 MB and its terrain WebP another ~0.3 MB, and
+ * they'd otherwise stay reachable from this handler's locals for the whole
+ * tail of the request — the response body and the R2 write both hold the
+ * (larger) glb at the same time, inside a 128 MB isolate that is also
+ * serving the rest of the viewport concurrently.
+ */
+function releaseSources(sources: SourceTile[], terrain: { webp: Uint8Array } | null): void {
+  sources.length = 0;
+  if (terrain) terrain.webp = new Uint8Array(0);
+}
 
 function retryLater(c: Context<{ Bindings: Env }>, msg: string): Response {
   return new Response(msg, {

@@ -36,10 +36,6 @@ pub struct FeatureProps {
     pub min_height_m: f32,
     pub roof_height_m: f32,
     pub roof_shape: Option<String>,
-    pub roof_material: Option<String>,
-    pub roof_color: Option<String>,
-    pub facade_material: Option<String>,
-    pub facade_color: Option<String>,
     pub num_floors: u16,
     /// Ground elevation (ellipsoidal metres) sampled at the centroid.
     pub ground_elev_m: f32,
@@ -460,10 +456,25 @@ pub fn build_mesh(
     }
 
     // ---- 2. emit features that pass the filter ----
-    let mut positions: Vec<f32> = Vec::new();
-    let mut normals: Vec<f32> = Vec::new();
-    let mut feature_ids: Vec<u16> = Vec::new();
-    let mut indices: Vec<u32> = Vec::new();
+    //
+    // Size the geometry buffers up front. Extrusion is deterministic in the
+    // ring vertex count N: at most N roof vertices plus 4 per wall quad, so
+    // 5N vertices and 9N indices (3 per roof triangle, of which there are at
+    // most N-2, plus 6 per quad). Growing from empty instead would leave up
+    // to 2x slack in three multi-megabyte buffers plus the copy each
+    // reallocation makes — the difference between fitting a dense z=14 tile
+    // in the worker's 128 MB isolate and not.
+    let ring_verts: usize = pending
+        .iter()
+        .filter(|b| filter.accepts(b.total_area_m2))
+        .flat_map(|b| b.fragments.iter())
+        .map(|f| polygon_vertex_count(&f.polygon))
+        .sum();
+    let vert_ub = ring_verts * 5;
+    let mut positions: Vec<f32> = Vec::with_capacity(vert_ub * 3);
+    let mut normals: Vec<f32> = Vec::with_capacity(vert_ub * 3);
+    let mut feature_ids: Vec<u16> = Vec::with_capacity(vert_ub);
+    let mut indices: Vec<u32> = Vec::with_capacity(ring_verts * 9);
     let mut features: Vec<FeatureProps> = Vec::new();
 
     for mut building in pending {
@@ -542,10 +553,6 @@ fn feature_props(
         min_height_m: feat.min_height.unwrap_or(0.0) as f32,
         roof_height_m: feat.roof_height.unwrap_or(0.0) as f32,
         roof_shape: feat.roof_shape.clone(),
-        roof_material: feat.roof_material.clone(),
-        roof_color: feat.roof_color.clone(),
-        facade_material: feat.facade_material.clone(),
-        facade_color: feat.facade_color.clone(),
         num_floors: feat.num_floors.unwrap_or(0).min(u16::MAX as u32) as u16,
         ground_elev_m: 0.0,
         footprint_m2: area_m2,
@@ -579,6 +586,23 @@ fn group_polygons(rings: &[Vec<[i32; 2]>]) -> Vec<Polygon> {
         }
     }
     out
+}
+
+/// Ring vertices an extrusion of this polygon will consume — outer plus
+/// every hole big enough to survive [`extrude_polygon`]'s `len() < 3` guard.
+fn polygon_vertex_count(polygon: &Polygon) -> usize {
+    let outer = if polygon.outer.len() >= 3 {
+        polygon.outer.len()
+    } else {
+        0
+    };
+    outer
+        + polygon
+            .holes
+            .iter()
+            .filter(|h| h.len() >= 3)
+            .map(Vec::len)
+            .sum::<usize>()
 }
 
 /// Replace a polygon with its axis-aligned bounding rectangle. The
