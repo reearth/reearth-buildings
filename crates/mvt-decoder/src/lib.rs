@@ -1,6 +1,6 @@
 //! Minimal Mapbox Vector Tile (MVT) decoder, scoped to extracting the
 //! `building` layer from Overture Maps PMTiles
-//! (overturemaps-tiles-us-west-2-beta).
+//! (`overturemaps-extras-us-west-2`, under `tiles/<release>/`).
 //!
 //! We hand-roll a tiny varint protobuf reader instead of pulling in
 //! `prost`/`protobuf` codegen. The MVT proto is only a handful of messages

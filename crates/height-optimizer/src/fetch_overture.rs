@@ -11,7 +11,12 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const BUCKET: &str = "https://overturemaps-tiles-us-west-2-beta.s3.amazonaws.com";
+/// Overture's PMTiles live here. The former
+/// `overturemaps-tiles-us-west-2-beta` bucket was shut off (403
+/// AllAccessDisabled) in July 2026; the replacement also nests every
+/// release under a `tiles/` prefix, which the old one did not.
+const BUCKET: &str = "https://overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com";
+const PREFIX: &str = "tiles/";
 /// Source tile zoom for Overture buildings PMTiles (matches the
 /// production worker — see `src/lod.ts`).
 pub const SOURCE_Z: u8 = 14;
@@ -24,28 +29,38 @@ pub struct OvertureSource {
 }
 
 pub fn fetch_release_url(release: &str) -> String {
-    format!("{BUCKET}/{release}/buildings.pmtiles")
+    format!("{BUCKET}/{PREFIX}{release}/buildings.pmtiles")
 }
 
-/// Discover the most recent yyyy-mm-dd release prefix in the bucket.
-/// Mirrors `src/version.ts::probeLatestRelease` — lexical sort, prefer
-/// non-beta on the same date.
+/// Discover the most recent yyyy-mm-dd release under the bucket's
+/// `tiles/` prefix. Mirrors `src/version.ts::probeLatestRelease` — same
+/// ordering, same preference for a non-beta release on the same date.
+///
+/// The listing has to be scoped to `tiles/`: the bucket's root holds
+/// several unrelated prefixes (`stac/`, `maproulette/`, …) and no
+/// releases at all.
 pub fn latest_release() -> Result<String> {
-    let xml = ureq::get(&format!("{BUCKET}/?list-type=2&delimiter=%2F"))
-        .timeout(std::time::Duration::from_secs(30))
-        .call()?
-        .into_string()?;
+    let xml = ureq::get(&format!(
+        "{BUCKET}/?list-type=2&delimiter=%2F&prefix={PREFIX}"
+    ))
+    .timeout(std::time::Duration::from_secs(30))
+    .call()?
+    .into_string()?;
     let mut releases: Vec<String> = Vec::new();
     for cap in xml.split("<Prefix>").skip(1) {
         if let Some(end) = cap.find("</Prefix>") {
             let p = &cap[..end];
             let p = p.trim_end_matches('/');
+            // Each CommonPrefixes entry is `tiles/<release>`; the echoed
+            // request prefix is `tiles/` alone and drops out of the date
+            // check below.
+            let p = p.strip_prefix(PREFIX).unwrap_or(p);
             if p.len() >= 10 && p.as_bytes()[4] == b'-' && p.as_bytes()[7] == b'-' {
                 releases.push(p.to_string());
             }
         }
     }
-    releases.sort();
+    releases.sort_by(compare_releases);
     let latest = releases
         .last()
         .cloned()
@@ -60,6 +75,28 @@ pub fn latest_release() -> Result<String> {
         }
     }
     Ok(latest)
+}
+
+/// Order two `yyyy-mm-dd.n` release names, oldest first. Date first,
+/// then the numeric suffix — `2026-08-19.10` is newer than
+/// `2026-08-19.2`, which a plain lexical sort gets backwards. The `n`
+/// may carry a `-beta` marker, which parses to its leading number; the
+/// beta preference is applied by the caller.
+fn compare_releases(a: &String, b: &String) -> std::cmp::Ordering {
+    let suffix = |r: &str| {
+        r.get(11..)
+            .map(|s| {
+                s.split(|c: char| !c.is_ascii_digit())
+                    .next()
+                    .unwrap_or("")
+                    .parse::<u32>()
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0)
+    };
+    a[..10]
+        .cmp(&b[..10])
+        .then_with(|| suffix(a).cmp(&suffix(b)))
 }
 
 /// Fetch every z=14 MVT tile overlapping `bbox` for `release`. Returns

@@ -4,7 +4,7 @@ import { sha1Hex } from "../hash";
 import { MAX_Z, MIN_Z, aabbOnlyAt, areaFilterFor, simplifyFor } from "../lod";
 import { fetchBuildingsMvt } from "../pmtiles";
 import { fetchTerrainWebp } from "../terrain";
-import { IMPL_VERSION, currentPmtilesDate } from "../version";
+import { IMPL_VERSION, withRelease } from "../version";
 import { type SourceTile, renderGlbWasm } from "../wasm";
 
 /**
@@ -36,32 +36,25 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     return c.text(`only z=${MIN_Z}..${MAX_Z} is served`, 404);
   }
 
-  // The release probe hits Overture's S3 ListBucket; like the tile fetches
-  // it can fail transiently (or persistently, as when the upstream bucket
-  // moved). Surface 503 + Retry-After instead of an uncaught 500.
-  let release: string;
-  try {
-    release = await currentPmtilesDate();
-  } catch (err) {
-    console.error("currentPmtilesDate failed", { err: String(err) });
-    return retryLater(c, "buildings upstream unavailable");
-  }
-
   // Fetch the single source MVT at the same coord. Overture's
   // buildings.pmtiles ships pre-generalized tiles at every zoom up to
   // MAX_Z, so we let the upstream do the per-zoom thinning instead of
   // aggregating 16 z=14 children into a z=12 output — that fan-in blew
   // past the Workers CPU budget on dense central-Tokyo tiles.
-  // Upstream PMTiles is the dominant source of transient flakiness
-  // ("Network connection lost.", sporadic 5xx from S3). fetchWithRetry
-  // inside the range source already retries once; if it still fails we
-  // surface 503 + Retry-After so loaders (Cesium, MapLibre) retry the
-  // tile rather than burning the URL with a 500.
+  //
+  // Both halves of this can fail: the release probe hits Overture's S3
+  // ListBucket, and the tile read is the dominant source of transient
+  // flakiness ("Network connection lost.", sporadic 5xx from S3).
+  // fetchWithRetry inside the range source already retries once, and
+  // withRelease covers the one failure retrying the same URL can't fix —
+  // a cached release that has since rolled out of the bucket. If it
+  // still fails we surface 503 + Retry-After so loaders (Cesium,
+  // MapLibre) retry the tile rather than burning the URL with a 500.
   let mvt: Uint8Array | null;
   try {
-    mvt = await fetchBuildingsMvt(release, z, x, y);
+    mvt = await withRelease((release) => fetchBuildingsMvt(release, z, x, y));
   } catch (err) {
-    console.error("fetchBuildingsMvt failed", { z, x, y, err: String(err) });
+    console.error("buildings mvt fetch failed", { z, x, y, err: String(err) });
     return retryLater(c, "buildings upstream unavailable");
   }
   if (!mvt) {

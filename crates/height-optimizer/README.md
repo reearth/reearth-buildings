@@ -12,6 +12,12 @@ instead of hand-waving.
 >   (`overturemaps-tiles-us-west-2-beta` bucket)
 > - PLATEAU CityGML: **fiscal-year 2025 release**
 >   (`api.plateauview.mlit.go.jp/datacatalog/citygml/{cityCode}`)
+>
+> The bucket named above is the one that evaluation read from. It was shut off
+> (403 AllAccessDisabled) in July 2026; the tool now reads
+> `overturemaps-extras-us-west-2`, where releases sit under `tiles/`.
+> Re-running this evaluation will therefore pull a newer release than
+> the numbers below were measured on.
 
 ## 1. Background and Problem
 
