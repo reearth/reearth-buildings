@@ -25,7 +25,7 @@ import { fetchWithRetry } from "./retry";
 // v3: Overture Maps Buildings + Re:Earth Terrain ground placement.
 // Earlier (v2) URL paths used Protomaps OSM and EGM2008 anchoring and
 // no longer make sense.
-const RENDERER_VERSION = "v5";
+export const RENDERER_VERSION = "v5";
 export const IMPL_VERSION = `${RENDERER_VERSION}-${LOD_MODE}`;
 
 /**

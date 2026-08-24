@@ -37,6 +37,16 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     return c.text(`only z=${MIN_Z}..${MAX_Z} is served`, 404);
   }
 
+  // Timed from here rather than from around the render, because a Worker's
+  // clock only advances after I/O — a Spectre mitigation — and the render is
+  // pure CPU. Read either side of it and the answer is zero however long it
+  // ran, which okibi would take as "free to regenerate".
+  //
+  // What this spans is a cold request end to end: fetch the sources, build
+  // the mesh, persist it. That is also the number worth having, since it is
+  // what somebody waited.
+  const startedAt = Date.now();
+
   // Fetch the single source MVT at the same coord. Overture's
   // buildings.pmtiles ships pre-generalized tiles at every zoom up to
   // MAX_Z, so we let the upstream do the per-zoom thinning instead of
@@ -123,10 +133,8 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
       return new Response(cached.body, { headers });
     }
     let glb: Uint8Array;
-    const startedAt = Date.now();
     try {
       glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, aabbOnly, terrainTile);
-      record("miss", Date.now() - startedAt, glb.byteLength);
     } catch (err) {
       console.error("renderGlbWasm failed", { z, x, y, err: String(err) });
       return retryLater(c, "renderer transient failure");
@@ -139,21 +147,26 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     // tears down the subrequest. Swallow it so it doesn't pollute the
     // exception log — the next request will regenerate and re-cache.
     c.executionCtx.waitUntil(
-      c.env.CACHE.put(r2Key, glb).catch((err) => {
-        console.error("R2 put failed", { r2Key, err: String(err) });
-      }),
+      c.env.CACHE.put(r2Key, glb)
+        .catch((err) => {
+          console.error("R2 put failed", { r2Key, err: String(err) });
+        })
+        // After the write, because the write is the I/O that lets the clock
+        // catch up with the render. Reading it before would be reading the
+        // time as of the last fetch.
+        .finally(() => record("miss", Date.now() - startedAt, glb.byteLength)),
     );
     return new Response(glb, { headers });
   }
 
   // CACHE_DISABLED: always regenerate, never touch R2.
   try {
-    const startedAt = Date.now();
     const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, aabbOnly, terrainTile);
-    // Still a miss, and still a request somebody made. The binding is absent
-    // wherever this var is set, so in practice this writes nothing — but a
-    // path that quietly stopped counting would be worse than one that counts
-    // and is never read.
+    // No write here, so nothing makes the clock catch up with the render and
+    // this reads as the fetches alone. The var is only set where there is no
+    // binding to write to, so in practice this writes nothing — but a path
+    // that quietly stopped counting would be worse than one that counts and
+    // is never read.
     record("miss", Date.now() - startedAt, glb.byteLength);
     // Inputs are dead now; see releaseSources.
     mvt = null;

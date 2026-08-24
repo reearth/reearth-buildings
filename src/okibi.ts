@@ -21,7 +21,8 @@ import { type TileDemand, createWriter, originOf } from "@reearth/okibi/writer";
 
 import epochs from "../okibi.epochs.json";
 import type { Env } from "./env";
-import { IMPL_VERSION } from "./version";
+import { LOD_MODE } from "./lod";
+import { RENDERER_VERSION } from "./version";
 
 /**
  * This worker serves one tileset.
@@ -62,9 +63,10 @@ export function writeTileDemand(
     // okibi does not warm a tile's ancestors here.
     qk: quadkeyForTile("web-mercator", coords.z, coords.x, coords.y),
     cacheStatus: measured.cacheStatus,
-    // The one part of the cache key that is not this tile's own content, and
-    // the one thing whose change costs a whole re-render of everything.
-    epoch: { algo: IMPL_VERSION },
+    // IMPL_VERSION, split back into the two things it folds together. They
+    // move for different reasons — a renderer bump is not an LOD flip — and
+    // a query that cannot tell them apart cannot say what either one cost.
+    epoch: { algo: RENDERER_VERSION, param: LOD_MODE },
     fmt: "glb",
     origin: originOf(request, env.OKIBI_WARM_SECRET),
     genMs: measured.genMs,
@@ -80,7 +82,7 @@ export function writeMetaDemand(env: Env, request: Request, id: string, measured
     kind: "tileset",
     id,
     cacheStatus: measured.cacheStatus,
-    epoch: { algo: IMPL_VERSION },
+    epoch: { algo: RENDERER_VERSION, param: LOD_MODE },
     fmt: "json",
     origin: originOf(request, env.OKIBI_WARM_SECRET),
     genMs: measured.genMs,
