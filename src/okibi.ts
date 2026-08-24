@@ -52,56 +52,72 @@ export function writeTileDemand(
   coords: { z: number; x: number; y: number },
   measured: Measured,
 ): void {
-  write(env, request, {
-    tileset: TILESET,
-    kind: "content",
-    // The URL after the version segment, which is what warming fetches.
-    id: `${coords.z}/${coords.x}/${coords.y}.glb`,
-    // Web Mercator, subdivided. The zoom is a size bucket rather than a
-    // resolution — z13 means "this much geometry", not "this much ground" —
-    // which is why the manifest declares `zoom_semantics: size_bucket` and
-    // okibi does not warm a tile's ancestors here.
-    qk: quadkeyForTile("web-mercator", coords.z, coords.x, coords.y),
-    cacheStatus: measured.cacheStatus,
-    // IMPL_VERSION, split back into the two things it folds together. They
-    // move for different reasons — a renderer bump is not an LOD flip — and
-    // a query that cannot tell them apart cannot say what either one cost.
-    epoch: { algo: RENDERER_VERSION, param: LOD_MODE },
-    fmt: "glb",
-    origin: originOf(request, env.OKIBI_WARM_SECRET),
-    genMs: measured.genMs,
-    bytes: measured.bytes,
-    z: coords.z,
-  });
+  // Built inside the guard rather than passed into it. Projection refuses a
+  // tile that is off its grid, and an argument is evaluated before the
+  // function that would have caught it — so this threw past `write`'s try
+  // block, out into whatever was serving the tile.
+  guarded(() =>
+    write(env, request, {
+      tileset: TILESET,
+      kind: "content",
+      // The URL after the version segment, which is what warming fetches.
+      id: `${coords.z}/${coords.x}/${coords.y}.glb`,
+      // Web Mercator, subdivided. The zoom is a size bucket rather than a
+      // resolution — z13 means "this much geometry", not "this much ground" —
+      // which is why the manifest declares `zoom_semantics: size_bucket` and
+      // okibi does not warm a tile's ancestors here.
+      qk: quadkeyForTile("web-mercator", coords.z, coords.x, coords.y),
+      cacheStatus: measured.cacheStatus,
+      // IMPL_VERSION, split back into the two things it folds together. They
+      // move for different reasons — a renderer bump is not an LOD flip — and
+      // a query that cannot tell them apart cannot say what either one cost.
+      epoch: { algo: RENDERER_VERSION, param: LOD_MODE },
+      fmt: "glb",
+      origin: originOf(request, env.OKIBI_WARM_SECRET),
+      genMs: measured.genMs,
+      bytes: measured.bytes,
+      z: coords.z,
+    }),
+  );
 }
 
 /** The same, for a document with no coordinates. */
 export function writeMetaDemand(env: Env, request: Request, id: string, measured: Measured): void {
-  write(env, request, {
-    tileset: TILESET,
-    kind: "tileset",
-    id,
-    cacheStatus: measured.cacheStatus,
-    epoch: { algo: RENDERER_VERSION, param: LOD_MODE },
-    fmt: "json",
-    origin: originOf(request, env.OKIBI_WARM_SECRET),
-    genMs: measured.genMs,
-    bytes: measured.bytes,
-  });
+  guarded(() =>
+    write(env, request, {
+      tileset: TILESET,
+      kind: "tileset",
+      id,
+      cacheStatus: measured.cacheStatus,
+      epoch: { algo: RENDERER_VERSION, param: LOD_MODE },
+      fmt: "json",
+      origin: originOf(request, env.OKIBI_WARM_SECRET),
+      genMs: measured.genMs,
+      bytes: measured.bytes,
+    }),
+  );
+}
+
+/**
+ * Nothing about recording a request may fail the request.
+ *
+ * This runs on the response path, after the bytes somebody asked for have
+ * been produced. A refused event is a line in a log.
+ */
+function guarded(record: () => void): void {
+  try {
+    record();
+  } catch (error) {
+    console.warn("okibi:", error);
+  }
 }
 
 function write(env: Env, request: Request, demand: TileDemand): void {
   if (!env.TILE_DEMAND) return;
 
-  try {
-    createWriter({
-      dataset: env.TILE_DEMAND,
-      epochs,
-      onError: (error) => console.warn("okibi:", error),
-    }).write(demand);
-  } catch (error) {
-    // Projection refuses a tile off its grid, which is a bug in a caller
-    // rather than a reason to fail the response.
-    console.warn("okibi:", error);
-  }
+  createWriter({
+    dataset: env.TILE_DEMAND,
+    epochs,
+    onError: (error) => console.warn("okibi:", error),
+  }).write(demand);
 }
