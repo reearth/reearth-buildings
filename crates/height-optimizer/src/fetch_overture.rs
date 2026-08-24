@@ -60,7 +60,7 @@ pub fn latest_release() -> Result<String> {
             }
         }
     }
-    releases.sort_by(compare_releases);
+    releases.sort_by(|a, b| compare_releases(a, b));
     let latest = releases
         .last()
         .cloned()
@@ -82,7 +82,7 @@ pub fn latest_release() -> Result<String> {
 /// `2026-08-19.2`, which a plain lexical sort gets backwards. The `n`
 /// may carry a `-beta` marker, which parses to its leading number; the
 /// beta preference is applied by the caller.
-fn compare_releases(a: &String, b: &String) -> std::cmp::Ordering {
+fn compare_releases(a: &str, b: &str) -> std::cmp::Ordering {
     let suffix = |r: &str| {
         r.get(11..)
             .map(|s| {
