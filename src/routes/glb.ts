@@ -72,7 +72,6 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
   const edgeKey = new Request(edgeUrl.toString(), { method: "GET" });
   if (!cacheDisabled(c.env)) {
     const edge = await edgeCache.match(edgeKey);
-    console.log("okibi/edge: lookup", edgeKey.url, edge ? "hit" : "miss");
     if (edge) {
       const stored = edge.headers.get("etag");
       if (stored && c.req.header("if-none-match") === stored) {
@@ -199,11 +198,11 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
       record("hit", "store", 0, cached.size);
       const response = new Response(cached.body, { headers });
       // So the next request for this tile does not read R2 again.
+      // So the next request for this tile does not read R2 again.
       c.executionCtx.waitUntil(
         edgeCache
           .put(edgeKey, response.clone())
-          .then(() => console.log("okibi/edge: stored from store", edgeKey.url))
-          .catch((err) => console.error("okibi/edge: put failed", String(err))),
+          .catch((err) => console.error("edge put failed", String(err))),
       );
       return response;
     }
@@ -235,8 +234,7 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     c.executionCtx.waitUntil(
       edgeCache
         .put(edgeKey, response.clone())
-        .then(() => console.log("okibi/edge: stored from render", edgeKey.url))
-        .catch((err) => console.error("okibi/edge: put failed", String(err))),
+        .catch((err) => console.error("edge put failed", String(err))),
     );
     return response;
   }
