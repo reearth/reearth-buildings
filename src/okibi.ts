@@ -17,7 +17,7 @@
 // Nothing in this file may fail a tile response.
 
 import { quadkeyForTile } from "@reearth/okibi";
-import { type TileDemand, createWriter, originOf } from "@reearth/okibi/writer";
+import { type CacheLayer, type TileDemand, createWriter, originOf } from "@reearth/okibi/writer";
 
 import epochs from "../okibi.epochs.json";
 import type { Env } from "./env";
@@ -36,6 +36,12 @@ const TILESET = "overture-global";
 
 export interface Measured {
   cacheStatus: "hit" | "miss";
+  /** Which layer had the bytes, when one did. Absent on a miss.
+   *
+   *  It does not change whether a tile is worth warming — a hit is somebody
+   *  wanting it either way — but it changes what serving it cost: a 304 is
+   *  free and an R2 read is a priced operation. */
+  layer?: CacheLayer | undefined;
   genMs: number;
   bytes: number;
 }
@@ -68,6 +74,7 @@ export function writeTileDemand(
       // okibi does not warm a tile's ancestors here.
       qk: quadkeyForTile("web-mercator", coords.z, coords.x, coords.y),
       cacheStatus: measured.cacheStatus,
+      cacheLayer: measured.layer,
       // IMPL_VERSION, split back into the two things it folds together. They
       // move for different reasons — a renderer bump is not an LOD flip — and
       // a query that cannot tell them apart cannot say what either one cost.
@@ -89,6 +96,7 @@ export function writeMetaDemand(env: Env, request: Request, id: string, measured
       kind: "tileset",
       id,
       cacheStatus: measured.cacheStatus,
+      cacheLayer: measured.layer,
       epoch: { algo: RENDERER_VERSION, param: LOD_MODE },
       fmt: "json",
       origin: originOf(request, env.OKIBI_WARM_SECRET),

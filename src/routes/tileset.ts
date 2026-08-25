@@ -71,11 +71,16 @@ export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
   // Every client asks for this before it asks for a tile, so okibi puts it at
   // the head of a warm plan unconditionally — a cold root document is not one
   // slow response, it is everyone's first paint.
-  const record = (cacheStatus: "hit" | "miss", bytes: number): void =>
-    writeMetaDemand(c.env, c.req.raw, "tileset.json", { cacheStatus, genMs: 0, bytes });
+  const record = (cacheStatus: "hit" | "miss", layer: "client" | undefined, bytes: number): void =>
+    writeMetaDemand(c.env, c.req.raw, "tileset.json", {
+      cacheStatus,
+      layer,
+      genMs: 0,
+      bytes,
+    });
 
   if (!noCache && c.req.header("if-none-match") === etag) {
-    record("hit", 0);
+    record("hit", "client", 0);
     return new Response(null, {
       status: 304,
       headers: { etag, "cache-control": cc },
@@ -100,7 +105,7 @@ export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
   // Composed here rather than fetched, so nothing was generated and nothing
   // was cached — but it was asked for, and warming it is what puts it in an
   // edge cache before the morning's first client.
-  record("miss", Number(response.headers.get("content-length") ?? 0));
+  record("miss", undefined, Number(response.headers.get("content-length") ?? 0));
   return response;
 };
 

@@ -111,11 +111,19 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
   // A 304 is somebody asking for this tile and being told they already have
   // it, which is demand like any other: the tile has to exist for the answer
   // to be that.
-  const record = (cacheStatus: "hit" | "miss", genMs: number, bytes: number): void =>
-    writeTileDemand(c.env, c.req.raw, { z, x, y }, { cacheStatus, genMs, bytes });
+  const record = (
+    cacheStatus: "hit" | "miss",
+    // `client` is a 304: the requester already had the bytes and only asked
+    // whether they were still current, so nothing was read anywhere.
+    layer: "client" | "store" | undefined,
+    genMs: number,
+    bytes: number,
+  ): void => writeTileDemand(c.env, c.req.raw, { z, x, y }, { cacheStatus, layer, genMs, bytes });
 
   if (!noCache && c.req.header("if-none-match") === etag) {
-    record("hit", 0, 0);
+    // Answered without reading anything: the client already had the bytes and
+    // only asked whether they were still current.
+    record("hit", "client", 0, 0);
     return new Response(null, { status: 304, headers });
   }
 
@@ -129,7 +137,7 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
       console.error("R2 get failed", { r2Key, err: String(err) });
     }
     if (cached) {
-      record("hit", 0, cached.size);
+      record("hit", "store", 0, cached.size);
       return new Response(cached.body, { headers });
     }
     let glb: Uint8Array;
@@ -154,7 +162,7 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
         // After the write, because the write is the I/O that lets the clock
         // catch up with the render. Reading it before would be reading the
         // time as of the last fetch.
-        .finally(() => record("miss", Date.now() - startedAt, glb.byteLength)),
+        .finally(() => record("miss", undefined, Date.now() - startedAt, glb.byteLength)),
     );
     return new Response(glb, { headers });
   }
@@ -167,7 +175,7 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     // binding to write to, so in practice this writes nothing — but a path
     // that quietly stopped counting would be worse than one that counts and
     // is never read.
-    record("miss", Date.now() - startedAt, glb.byteLength);
+    record("miss", undefined, Date.now() - startedAt, glb.byteLength);
     // Inputs are dead now; see releaseSources.
     mvt = null;
     releaseSources(sourceTiles, terrainTile);
