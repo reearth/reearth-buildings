@@ -47,54 +47,6 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
   // what somebody waited.
   const startedAt = Date.now();
 
-  // The edge cache, before anything is fetched.
-  //
-  // Everything below this point costs at least two subrequests: the ETag is a
-  // hash of the MVT inputs, so even answering "you already have it" means
-  // fetching them. A colo-local hit skips the fetches, the R2 read and the
-  // render together, which is the whole of what serving a warm tile costs.
-  //
-  // Keyed on the plain URL rather than on the content hash, because the hash
-  // is not known until after the fetches this is trying to avoid. What that
-  // costs is that an entry may be up to `max-age` behind an Overture release
-  // — which is the same thing the response already promises every client.
-  const edgeCache = caches.default;
-  const edgeKey = new Request(new URL(c.req.url).toString(), { method: "GET" });
-  if (!cacheDisabled(c.env)) {
-    const edge = await edgeCache.match(edgeKey);
-    if (edge) {
-      const stored = edge.headers.get("etag");
-      if (stored && c.req.header("if-none-match") === stored) {
-        writeTileDemand(
-          c.env,
-          c.req.raw,
-          { z, x, y },
-          { cacheStatus: "hit", layer: "client", genMs: 0, bytes: 0 },
-        );
-        return new Response(null, {
-          status: 304,
-          headers: {
-            etag: stored,
-            "cache-control": edge.headers.get("cache-control") ?? "",
-            "access-control-allow-origin": "*",
-          },
-        });
-      }
-      writeTileDemand(
-        c.env,
-        c.req.raw,
-        { z, x, y },
-        {
-          cacheStatus: "hit",
-          layer: "edge",
-          genMs: 0,
-          bytes: Number(edge.headers.get("content-length") ?? 0),
-        },
-      );
-      return edge;
-    }
-  }
-
   // Fetch the single source MVT at the same coord. Overture's
   // buildings.pmtiles ships pre-generalized tiles at every zoom up to
   // MAX_Z, so we let the upstream do the per-zoom thinning instead of
@@ -163,7 +115,7 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     cacheStatus: "hit" | "miss",
     // `client` is a 304: the requester already had the bytes and only asked
     // whether they were still current, so nothing was read anywhere.
-    layer: "client" | "edge" | "store" | undefined,
+    layer: "client" | "store" | undefined,
     genMs: number,
     bytes: number,
   ): void => writeTileDemand(c.env, c.req.raw, { z, x, y }, { cacheStatus, layer, genMs, bytes });
@@ -186,10 +138,7 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     }
     if (cached) {
       record("hit", "store", 0, cached.size);
-      const response = new Response(cached.body, { headers });
-      // So the next request for this tile does not read R2 again.
-      c.executionCtx.waitUntil(edgeCache.put(edgeKey, response.clone()));
-      return response;
+      return new Response(cached.body, { headers });
     }
     let glb: Uint8Array;
     try {
@@ -215,9 +164,7 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
         // time as of the last fetch.
         .finally(() => record("miss", undefined, Date.now() - startedAt, glb.byteLength)),
     );
-    const response = new Response(glb, { headers });
-    c.executionCtx.waitUntil(edgeCache.put(edgeKey, response.clone()));
-    return response;
+    return new Response(glb, { headers });
   }
 
   // CACHE_DISABLED: always regenerate, never touch R2.
