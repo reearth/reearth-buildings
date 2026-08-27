@@ -58,7 +58,7 @@ jobs:
               --file "digests/$date.jsonl" --remote || true
           done
 
-      - uses: reearth/okibi/actions/plan@v0.6.0
+      - uses: reearth/okibi/actions/plan@v0.8.0
         with:
           manifests: okibi.manifest.json
           digests: digests/
@@ -101,7 +101,7 @@ jobs:
               --file "digests/$date.jsonl" --remote || true
           done
 
-      - uses: reearth/okibi/actions/plan@v0.6.0
+      - uses: reearth/okibi/actions/plan@v0.8.0
         id: plan
         with:
           manifests: okibi.manifest.json
@@ -112,7 +112,7 @@ jobs:
           # Warming the tiles people ask for in the morning, before morning.
           deadline: ${{ github.event.repository.pushed_at }}
 
-      - uses: reearth/okibi/actions/warm@v0.6.0
+      - uses: reearth/okibi/actions/warm@v0.8.0
         if: steps.plan.outputs.plan != ''
         with:
           plan: ${{ steps.plan.outputs.plan }}
