@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { Env } from "./env";
+import { dayBefore, takeDigest } from "./okibi-digest";
 import { overturePmtilesProxy } from "./routes/debug";
 import { glbTile } from "./routes/glb";
 import { subTilesetJson, tilesetJson } from "./routes/tileset";
@@ -54,4 +55,21 @@ app.get("/:impl/sub/:z/:x/:y/tileset.json", subTilesetJson);
 // handler strips it before parsing.
 app.get("/:impl/:z/:x/:y", glbTile);
 
-export default app;
+export default {
+  fetch: app.fetch,
+
+  /**
+   * The daily demand digest.
+   *
+   * Aggregating a day is not part of serving tiles, and a digest that fails
+   * is a digest missing for a day — so it is logged rather than thrown, which
+   * would only retry the same failing query on the same finished day.
+   */
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(
+      takeDigest(env, dayBefore(controller.scheduledTime)).catch((error) => {
+        console.warn("okibi: digest failed", error);
+      }),
+    );
+  },
+} satisfies ExportedHandler<Env>;

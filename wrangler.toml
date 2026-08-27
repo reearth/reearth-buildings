@@ -18,6 +18,18 @@ directory = "./public"
 # CACHE_DISABLED bypasses the R2 glb cache and emits `Cache-Control:
 # no-store` on every response. Local dev overrides via `.dev.vars`.
 CACHE_DISABLED = ""
+# OKIBI_ACCOUNT_ID and OKIBI_CF_API_TOKEN are set as secrets rather than
+# listed here. The token obviously; the account id because this repository is
+# public and an account id is an identifier nobody needs published.
+#
+#   wrangler secret put OKIBI_ACCOUNT_ID
+#   wrangler secret put OKIBI_CF_API_TOKEN
+
+# Daily demand digest at 03:00 JST, aggregating the UTC day before. Analytics
+# Engine keeps three months and a demand model wants longer, so the digest
+# goes to R2 under `okibi/digests/`. See `src/okibi-digest.ts`.
+[triggers]
+crons = ["0 18 * * *"]
 
 [[r2_buckets]]
 binding = "CACHE"
