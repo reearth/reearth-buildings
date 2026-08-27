@@ -3,7 +3,7 @@
   "service": "buildings",
   "url_template": "https://buildings.reearth.land/{epoch.algo}-{epoch.param}/{id}",
   "meta_urls": {
-    "tileset": "https://buildings.reearth.land/{id}"
+    "tileset": null
   },
   "cost": {
     "default_gen_ms": 2971,
