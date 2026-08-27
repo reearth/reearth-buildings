@@ -1,9 +1,10 @@
+import epochs from "../okibi.epochs.json";
 import { LOD_MODE } from "./lod";
 import { fetchWithRetry } from "./retry";
 
 /**
- * Bump when the renderer / glb schema changes. Lives in the URL prefix so
- * a bump alone invalidates every cache layer atomically.
+ * Bump — in okibi.epochs.json — when the renderer / glb schema changes. Lives
+ * in the URL prefix so a bump alone invalidates every cache layer atomically.
  *
  * Monthly upstream updates are *not* propagated through this constant.
  * Instead, the glb route uses a content hash of the MVT bytes for the
@@ -25,7 +26,10 @@ import { fetchWithRetry } from "./retry";
 // v3: Overture Maps Buildings + Re:Earth Terrain ground placement.
 // Earlier (v2) URL paths used Protomaps OSM and EGM2008 anchoring and
 // no longer make sense.
-export const RENDERER_VERSION = "v5";
+// Read from okibi.epochs.json for the same reason LOD_MODE is: it is part of
+// the cache key, okibi reports it as the `algo` epoch, and a second copy is a
+// string that can drift from the key it claims to describe.
+export const RENDERER_VERSION = epochs.tilesets["overture-global"].algo;
 export const IMPL_VERSION = `${RENDERER_VERSION}-${LOD_MODE}`;
 
 /**

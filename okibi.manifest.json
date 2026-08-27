@@ -1,0 +1,27 @@
+{
+  "manifest": "okibi-service/1",
+  "service": "buildings",
+  "url_template": "https://buildings.reearth.land/{epoch.algo}-{epoch.param}/{id}",
+  "meta_urls": {
+    "tileset": "https://buildings.reearth.land/{id}"
+  },
+  "cost": {
+    "default_gen_ms": 2971,
+    "default_bytes": 470000,
+    "concurrency_limit": 4,
+    "rate_per_s": 2,
+    "billing": {
+      "pricing_profile": "cloudflare",
+      "per_gen": {
+        "cpu_ms": null,
+        "class_a_operation": 1,
+        "egress_byte": null
+      }
+    }
+  },
+  "lanes": { "interactive_priority": true },
+  "depends_on": [
+    { "service": "terrain", "reason": "ground height lookup", "order": "before" }
+  ],
+  "zoom_semantics": "size_bucket"
+}

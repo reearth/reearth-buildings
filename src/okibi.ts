@@ -17,12 +17,16 @@
 // Nothing in this file may fail a tile response.
 
 import { quadkeyForTile } from "@reearth/okibi";
-import { type CacheLayer, type TileDemand, createWriter, originOf } from "@reearth/okibi/writer";
+import {
+  type CacheLayer,
+  type TileDemand,
+  createWriter,
+  epochFor,
+  originOf,
+} from "@reearth/okibi/writer";
 
 import epochs from "../okibi.epochs.json";
 import type { Env } from "./env";
-import { LOD_MODE } from "./lod";
-import { RENDERER_VERSION } from "./version";
 
 /**
  * This worker serves one tileset.
@@ -33,6 +37,17 @@ import { RENDERER_VERSION } from "./version";
  * vocabulary rather than a second value of this one.
  */
 const TILESET = "overture-global";
+
+/**
+ * IMPL_VERSION, split back into the two things it folds together.
+ *
+ * Taken from the file the cache key is built from rather than reassembled
+ * from the constants, so `tile.epoch.*` is the key rather than a second
+ * spelling of it. They also move for different reasons — a renderer bump is
+ * not an LOD flip — and a query that cannot tell them apart cannot say what
+ * either one cost.
+ */
+const EPOCH = epochFor(epochs, TILESET);
 
 export interface Measured {
   cacheStatus: "hit" | "miss";
@@ -75,10 +90,7 @@ export function writeTileDemand(
       qk: quadkeyForTile("web-mercator", coords.z, coords.x, coords.y),
       cacheStatus: measured.cacheStatus,
       cacheLayer: measured.layer,
-      // IMPL_VERSION, split back into the two things it folds together. They
-      // move for different reasons — a renderer bump is not an LOD flip — and
-      // a query that cannot tell them apart cannot say what either one cost.
-      epoch: { algo: RENDERER_VERSION, param: LOD_MODE },
+      epoch: EPOCH,
       fmt: "glb",
       origin: originOf(request, env.OKIBI_WARM_SECRET),
       genMs: measured.genMs,
@@ -97,7 +109,7 @@ export function writeMetaDemand(env: Env, request: Request, id: string, measured
       id,
       cacheStatus: measured.cacheStatus,
       cacheLayer: measured.layer,
-      epoch: { algo: RENDERER_VERSION, param: LOD_MODE },
+      epoch: EPOCH,
       fmt: "json",
       origin: originOf(request, env.OKIBI_WARM_SECRET),
       genMs: measured.genMs,
