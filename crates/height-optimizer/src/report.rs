@@ -146,12 +146,12 @@ fn push_compare_table(out: &mut String, rows: &[(&str, &Stats, &Stats)]) {
 
 fn fmt_pair(b: f32, c: f32, _signed: bool) -> String {
     let arrow = arrow_for(b, c, /* lower_is_better = */ true);
-    format!("{:.2} → {:.2} {arrow}", b, c)
+    format!("{b:.2} → {c:.2} {arrow}")
 }
 
 fn fmt_pair_signed(b: f32, c: f32) -> String {
     let arrow = arrow_for(b.abs(), c.abs(), true);
-    format!("{:+.2} → {:+.2} {arrow}", b, c)
+    format!("{b:+.2} → {c:+.2} {arrow}")
 }
 
 fn fmt_pct_pair(b: f32, c: f32) -> String {

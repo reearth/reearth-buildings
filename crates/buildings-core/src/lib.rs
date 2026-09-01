@@ -3,13 +3,17 @@
 //! Terrarium WebP tile.
 
 pub mod coord;
+pub mod features;
 pub mod glb;
 pub mod height_config;
+pub mod height_model;
 pub mod mesh;
 
+pub use features::{FeatureEncoder, FeatureInput, TileContext};
 pub use height_config::{
-    FootprintBucket, FootprintCurve, FootprintTable, HeightConfig, UrbanThresholds,
+    FootprintBucket, FootprintCurve, FootprintTable, HeightConfig, ModelMode, UrbanThresholds,
 };
+pub use height_model::GbtModel;
 pub use mesh::{AreaFilter, ExtractedBuilding};
 
 #[derive(Debug, thiserror::Error)]
