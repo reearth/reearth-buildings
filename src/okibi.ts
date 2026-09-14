@@ -23,6 +23,7 @@ import {
   createWriter,
   epochFor,
   originOf,
+  siteOf,
 } from "@reearth/okibi/writer";
 
 import epochs from "../okibi.epochs.json";
@@ -93,6 +94,10 @@ export function writeTileDemand(
       epoch: EPOCH,
       fmt: "glb",
       origin: originOf(request, env.OKIBI_WARM_SECRET),
+      // Which site embedded this tile, as a bare origin. This service is a
+      // dependency of other people's maps and nothing else it records says
+      // whose. An origin, never a page URL — see siteOf.
+      site: siteOf(request),
       genMs: measured.genMs,
       bytes: measured.bytes,
       z: coords.z,
@@ -112,6 +117,10 @@ export function writeMetaDemand(env: Env, request: Request, id: string, measured
       epoch: EPOCH,
       fmt: "json",
       origin: originOf(request, env.OKIBI_WARM_SECRET),
+      // Which site embedded this tile, as a bare origin. This service is a
+      // dependency of other people's maps and nothing else it records says
+      // whose. An origin, never a page URL — see siteOf.
+      site: siteOf(request),
       genMs: measured.genMs,
       bytes: measured.bytes,
     }),
