@@ -65,11 +65,17 @@ export default {
    * is a digest missing for a day — so it is logged rather than thrown, which
    * would only retry the same failing query on the same finished day.
    */
-  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(
-      takeDigest(env, dayBefore(controller.scheduledTime)).catch((error) => {
-        console.warn("okibi: digest failed", error);
-      }),
-    );
+  async scheduled(controller: ScheduledController, env: Env) {
+    // Awaited rather than handed to `ctx.waitUntil`. Work passed to waitUntil
+    // runs after the invocation ends, and only for as long as the runtime is
+    // willing to keep an ended invocation alive — which on a busy day is not
+    // long enough to read a day of events and write the digest. That is what
+    // took 2026-09-07 out of this bucket, and out of Papers' on the same tick.
+    // Awaiting keeps the invocation open until the digest is written.
+    try {
+      await takeDigest(env, dayBefore(controller.scheduledTime));
+    } catch (error) {
+      console.warn("okibi: digest failed", error);
+    }
   },
 } satisfies ExportedHandler<Env>;
