@@ -1,0 +1,152 @@
+// Tile-demand events, so something outside this worker can warm what people
+// actually ask for.
+//
+// A glb is Overture footprints, a terrain lookup for ground height, and mesh
+// generation — seconds of the 30s CPU budget this worker is configured for.
+// A renderer bump moves IMPL_VERSION, which is the whole URL space, so every
+// tile is cold at once and every first visitor pays a whole render. okibi
+// decides which of them to regenerate early, from a record of what was asked
+// for. See https://github.com/reearth/okibi, spec/tile-demand.md.
+//
+// An Overture release is not that kind of change. The cache key is a content
+// hash of the MVT inputs, so a release only orphans the tiles whose bytes
+// actually moved and the rest stay warm — which is why nothing here reports a
+// source epoch: it is not in the key, and an epoch that is not in the key is a
+// string okibi could never match an invalidation against.
+//
+// Nothing in this file may fail a tile response.
+
+import { quadkeyForTile } from "@reearth/okibi";
+import {
+  type CacheLayer,
+  type TileDemand,
+  createWriter,
+  epochFor,
+  originOf,
+  siteOf,
+} from "@reearth/okibi/writer";
+
+import epochs from "../okibi.epochs.json";
+import type { Env } from "./env";
+
+/**
+ * This worker serves one tileset.
+ *
+ * Named here rather than derived from a request, because it is a fact about
+ * the service and not about the tile: every glb it serves is Overture's
+ * global buildings, and a second tileset would be a second name in the
+ * vocabulary rather than a second value of this one.
+ */
+const TILESET = "overture-global";
+
+/**
+ * IMPL_VERSION, split back into the two things it folds together.
+ *
+ * Taken from the file the cache key is built from rather than reassembled
+ * from the constants, so `tile.epoch.*` is the key rather than a second
+ * spelling of it. They also move for different reasons — a renderer bump is
+ * not an LOD flip — and a query that cannot tell them apart cannot say what
+ * either one cost.
+ */
+const EPOCH = epochFor(epochs, TILESET);
+
+export interface Measured {
+  cacheStatus: "hit" | "miss";
+  /** Which layer had the bytes, when one did. Absent on a miss.
+   *
+   *  It does not change whether a tile is worth warming — a hit is somebody
+   *  wanting it either way — but it changes what serving it cost: a 304 is
+   *  free and an R2 read is a priced operation. */
+  layer?: CacheLayer | undefined;
+  genMs: number;
+  bytes: number;
+}
+
+/**
+ * Write one event for a glb tile, if the binding is there.
+ *
+ * Optional so that a deployment without Analytics Engine — a preview, a fork,
+ * `wrangler dev` — serves tiles exactly as before.
+ */
+export function writeTileDemand(
+  env: Env,
+  request: Request,
+  coords: { z: number; x: number; y: number },
+  measured: Measured,
+): void {
+  // Built inside the guard rather than passed into it. Projection refuses a
+  // tile that is off its grid, and an argument is evaluated before the
+  // function that would have caught it — so this threw past `write`'s try
+  // block, out into whatever was serving the tile.
+  guarded(() =>
+    write(env, request, {
+      tileset: TILESET,
+      kind: "content",
+      // The URL after the version segment, which is what warming fetches.
+      id: `${coords.z}/${coords.x}/${coords.y}.glb`,
+      // Web Mercator, subdivided. The zoom is a size bucket rather than a
+      // resolution — z13 means "this much geometry", not "this much ground" —
+      // which is why the manifest declares `zoom_semantics: size_bucket` and
+      // okibi does not warm a tile's ancestors here.
+      qk: quadkeyForTile("web-mercator", coords.z, coords.x, coords.y),
+      cacheStatus: measured.cacheStatus,
+      cacheLayer: measured.layer,
+      epoch: EPOCH,
+      fmt: "glb",
+      origin: originOf(request, env.OKIBI_WARM_SECRET),
+      // Which site embedded this tile, as a bare origin. This service is a
+      // dependency of other people's maps and nothing else it records says
+      // whose. An origin, never a page URL — see siteOf.
+      site: siteOf(request),
+      genMs: measured.genMs,
+      bytes: measured.bytes,
+      z: coords.z,
+    }),
+  );
+}
+
+/** The same, for a document with no coordinates. */
+export function writeMetaDemand(env: Env, request: Request, id: string, measured: Measured): void {
+  guarded(() =>
+    write(env, request, {
+      tileset: TILESET,
+      kind: "tileset",
+      id,
+      cacheStatus: measured.cacheStatus,
+      cacheLayer: measured.layer,
+      epoch: EPOCH,
+      fmt: "json",
+      origin: originOf(request, env.OKIBI_WARM_SECRET),
+      // Which site embedded this tile, as a bare origin. This service is a
+      // dependency of other people's maps and nothing else it records says
+      // whose. An origin, never a page URL — see siteOf.
+      site: siteOf(request),
+      genMs: measured.genMs,
+      bytes: measured.bytes,
+    }),
+  );
+}
+
+/**
+ * Nothing about recording a request may fail the request.
+ *
+ * This runs on the response path, after the bytes somebody asked for have
+ * been produced. A refused event is a line in a log.
+ */
+function guarded(record: () => void): void {
+  try {
+    record();
+  } catch (error) {
+    console.warn("okibi:", error);
+  }
+}
+
+function write(env: Env, request: Request, demand: TileDemand): void {
+  if (!env.TILE_DEMAND) return;
+
+  createWriter({
+    dataset: env.TILE_DEMAND,
+    epochs,
+    onError: (error) => console.warn("okibi:", error),
+  }).write(demand);
+}

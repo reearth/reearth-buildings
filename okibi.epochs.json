@@ -1,0 +1,9 @@
+{
+  "service": "buildings",
+  "tilesets": {
+    "overture-global": {
+      "algo": "v5",
+      "param": "add"
+    }
+  }
+}

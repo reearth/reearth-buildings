@@ -9,6 +9,7 @@ import {
   geometricErrorFor,
   refineFor,
 } from "../lod";
+import { writeMetaDemand } from "../okibi";
 import { tileRegion, toRad } from "../tile";
 import { IMPL_VERSION } from "../version";
 
@@ -62,12 +63,32 @@ const jsonResponse = (body: unknown, cacheControl: string, etag: string) =>
     },
   });
 
+/** The size of a JSON document, in the bytes it will actually be sent as.
+ *
+ *  Measured from the string rather than read back off the response: the
+ *  runtime adds `content-length` on the way out, so a `Response` built here
+ *  does not carry one and asking it for one yields zero — which okibi records
+ *  as a document that costs nothing to serve. */
+const jsonBytes = (body: unknown) => new TextEncoder().encode(JSON.stringify(body)).length;
+
 /** Unversioned root tileset. */
 export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
   const noCache = cacheDisabled(c.env);
   const etag = `"${IMPL_VERSION}-root"`;
   const cc = noCache ? "no-store" : "public, max-age=60, must-revalidate";
+  // Every client asks for this before it asks for a tile, so okibi puts it at
+  // the head of a warm plan unconditionally — a cold root document is not one
+  // slow response, it is everyone's first paint.
+  const record = (cacheStatus: "hit" | "miss", layer: "client" | undefined, bytes: number): void =>
+    writeMetaDemand(c.env, c.req.raw, "tileset.json", {
+      cacheStatus,
+      layer,
+      genMs: 0,
+      bytes,
+    });
+
   if (!noCache && c.req.header("if-none-match") === etag) {
+    record("hit", "client", 0);
     return new Response(null, {
       status: 304,
       headers: { etag, "cache-control": cc },
@@ -88,6 +109,13 @@ export const tilesetJson = (c: Context<{ Bindings: Env }>) => {
   // them only a 304. When IMPL_VERSION moves the URL contents change,
   // the ETag changes, and clients pick up the new sub-tileset prefix
   // without needing a manual hard reload.
+  // Composed here rather than fetched, so nothing was generated and nothing
+  // was cached: this route deliberately skips every cache in front of it, and
+  // a client without the ETag always gets the whole document. That is why
+  // okibi sees this cell as a permanent miss, and it is honest — but it also
+  // means there is nothing here for a warm request to put anywhere. What
+  // makes the first paint cheap is the 304 above, not warming.
+  record("miss", undefined, jsonBytes(body));
   return jsonResponse(body, cc, etag);
 };
 

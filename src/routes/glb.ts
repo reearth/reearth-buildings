@@ -2,9 +2,10 @@ import type { Context } from "hono";
 import { type Env, cacheDisabled } from "../env";
 import { sha1Hex } from "../hash";
 import { MAX_Z, MIN_Z, aabbOnlyAt, areaFilterFor, simplifyFor } from "../lod";
+import { writeTileDemand } from "../okibi";
 import { fetchBuildingsMvt } from "../pmtiles";
 import { fetchTerrainWebp } from "../terrain";
-import { IMPL_VERSION, currentPmtilesDate } from "../version";
+import { IMPL_VERSION, withRelease } from "../version";
 import { type SourceTile, renderGlbWasm } from "../wasm";
 
 /**
@@ -36,15 +37,72 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     return c.text(`only z=${MIN_Z}..${MAX_Z} is served`, 404);
   }
 
-  // The release probe hits Overture's S3 ListBucket; like the tile fetches
-  // it can fail transiently (or persistently, as when the upstream bucket
-  // moved). Surface 503 + Retry-After instead of an uncaught 500.
-  let release: string;
-  try {
-    release = await currentPmtilesDate();
-  } catch (err) {
-    console.error("currentPmtilesDate failed", { err: String(err) });
-    return retryLater(c, "buildings upstream unavailable");
+  // Timed from here rather than from around the render, because a Worker's
+  // clock only advances after I/O — a Spectre mitigation — and the render is
+  // pure CPU. Read either side of it and the answer is zero however long it
+  // ran, which okibi would take as "free to regenerate".
+  //
+  // What this spans is a cold request end to end: fetch the sources, build
+  // the mesh, persist it. That is also the number worth having, since it is
+  // what somebody waited.
+  const startedAt = Date.now();
+
+  // The edge cache, before anything is fetched.
+  //
+  // Everything below this point costs at least two subrequests: the ETag is a
+  // hash of the MVT inputs, so even answering "you already have it" means
+  // fetching them. A colo-local hit skips the fetches, the R2 read and the
+  // render together, which is the whole of what serving a warm tile costs.
+  //
+  // Keyed on a URL no client sends, which is the point. An entry stored under
+  // the plain request URL is one the edge can find on its own, and then it
+  // answers before this worker runs — the tile is served, and the fact that
+  // somebody wanted it is never written down. The tiles that would vanish
+  // first are the popular ones, which are exactly the ones a warm plan puts
+  // first. Both other Re:Earth tile workers key their edge entries this way
+  // for the same reason.
+  //
+  // Not keyed on the content hash, because the hash is not known until after
+  // the fetches this is trying to avoid. What that costs is an entry up to
+  // `max-age` behind an Overture release, which is what the response already
+  // promises every client.
+  const edgeCache = caches.default;
+  const edgeUrl = new URL(c.req.url);
+  edgeUrl.searchParams.set("__v", IMPL_VERSION);
+  const edgeKey = new Request(edgeUrl.toString(), { method: "GET" });
+  if (!cacheDisabled(c.env)) {
+    const edge = await edgeCache.match(edgeKey);
+    if (edge) {
+      const stored = edge.headers.get("etag");
+      if (stored && c.req.header("if-none-match") === stored) {
+        writeTileDemand(
+          c.env,
+          c.req.raw,
+          { z, x, y },
+          { cacheStatus: "hit", layer: "client", genMs: 0, bytes: 0 },
+        );
+        return new Response(null, {
+          status: 304,
+          headers: {
+            etag: stored,
+            "cache-control": edge.headers.get("cache-control") ?? "",
+            "access-control-allow-origin": "*",
+          },
+        });
+      }
+      writeTileDemand(
+        c.env,
+        c.req.raw,
+        { z, x, y },
+        {
+          cacheStatus: "hit",
+          layer: "edge",
+          genMs: 0,
+          bytes: Number(edge.headers.get("content-length") ?? 0),
+        },
+      );
+      return edge;
+    }
   }
 
   // Fetch the single source MVT at the same coord. Overture's
@@ -52,16 +110,20 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
   // MAX_Z, so we let the upstream do the per-zoom thinning instead of
   // aggregating 16 z=14 children into a z=12 output — that fan-in blew
   // past the Workers CPU budget on dense central-Tokyo tiles.
-  // Upstream PMTiles is the dominant source of transient flakiness
-  // ("Network connection lost.", sporadic 5xx from S3). fetchWithRetry
-  // inside the range source already retries once; if it still fails we
-  // surface 503 + Retry-After so loaders (Cesium, MapLibre) retry the
-  // tile rather than burning the URL with a 500.
+  //
+  // Both halves of this can fail: the release probe hits Overture's S3
+  // ListBucket, and the tile read is the dominant source of transient
+  // flakiness ("Network connection lost.", sporadic 5xx from S3).
+  // fetchWithRetry inside the range source already retries once, and
+  // withRelease covers the one failure retrying the same URL can't fix —
+  // a cached release that has since rolled out of the bucket. If it
+  // still fails we surface 503 + Retry-After so loaders (Cesium,
+  // MapLibre) retry the tile rather than burning the URL with a 500.
   let mvt: Uint8Array | null;
   try {
-    mvt = await fetchBuildingsMvt(release, z, x, y);
+    mvt = await withRelease((release) => fetchBuildingsMvt(release, z, x, y));
   } catch (err) {
-    console.error("fetchBuildingsMvt failed", { z, x, y, err: String(err) });
+    console.error("buildings mvt fetch failed", { z, x, y, err: String(err) });
     return retryLater(c, "buildings upstream unavailable");
   }
   if (!mvt) {
@@ -104,7 +166,22 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
     "access-control-allow-origin": "*",
   } as const;
 
+  // A 304 is somebody asking for this tile and being told they already have
+  // it, which is demand like any other: the tile has to exist for the answer
+  // to be that.
+  const record = (
+    cacheStatus: "hit" | "miss",
+    // `client` is a 304: the requester already had the bytes and only asked
+    // whether they were still current, so nothing was read anywhere.
+    layer: "client" | "edge" | "store" | undefined,
+    genMs: number,
+    bytes: number,
+  ): void => writeTileDemand(c.env, c.req.raw, { z, x, y }, { cacheStatus, layer, genMs, bytes });
+
   if (!noCache && c.req.header("if-none-match") === etag) {
+    // Answered without reading anything: the client already had the bytes and
+    // only asked whether they were still current.
+    record("hit", "client", 0, 0);
     return new Response(null, { status: 304, headers });
   }
 
@@ -118,7 +195,16 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
       console.error("R2 get failed", { r2Key, err: String(err) });
     }
     if (cached) {
-      return new Response(cached.body, { headers });
+      record("hit", "store", 0, cached.size);
+      const response = new Response(cached.body, { headers });
+      // So the next request for this tile does not read R2 again.
+      // So the next request for this tile does not read R2 again.
+      c.executionCtx.waitUntil(
+        edgeCache
+          .put(edgeKey, response.clone())
+          .catch((err) => console.error("edge put failed", String(err))),
+      );
+      return response;
     }
     let glb: Uint8Array;
     try {
@@ -127,27 +213,64 @@ export const glbTile = async (c: Context<{ Bindings: Env }>) => {
       console.error("renderGlbWasm failed", { z, x, y, err: String(err) });
       return retryLater(c, "renderer transient failure");
     }
+    // Inputs are dead now; see releaseSources.
+    mvt = null;
+    releaseSources(sourceTiles, terrainTile);
     // The R2 write happens after the response is dispatched; the runtime
     // sometimes raises "Network connection lost." here when the edge
     // tears down the subrequest. Swallow it so it doesn't pollute the
     // exception log — the next request will regenerate and re-cache.
     c.executionCtx.waitUntil(
-      c.env.CACHE.put(r2Key, glb).catch((err) => {
-        console.error("R2 put failed", { r2Key, err: String(err) });
-      }),
+      c.env.CACHE.put(r2Key, glb)
+        .catch((err) => {
+          console.error("R2 put failed", { r2Key, err: String(err) });
+        })
+        // After the write, because the write is the I/O that lets the clock
+        // catch up with the render. Reading it before would be reading the
+        // time as of the last fetch.
+        .finally(() => record("miss", undefined, Date.now() - startedAt, glb.byteLength)),
     );
-    return new Response(glb, { headers });
+    const response = new Response(glb, { headers });
+    c.executionCtx.waitUntil(
+      edgeCache
+        .put(edgeKey, response.clone())
+        .catch((err) => console.error("edge put failed", String(err))),
+    );
+    return response;
   }
 
   // CACHE_DISABLED: always regenerate, never touch R2.
   try {
     const glb = renderGlbWasm(sourceTiles, { z, x, y }, filter, simplify, aabbOnly, terrainTile);
+    // No write here, so nothing makes the clock catch up with the render and
+    // this reads as the fetches alone. The var is only set where there is no
+    // binding to write to, so in practice this writes nothing — but a path
+    // that quietly stopped counting would be worse than one that counts and
+    // is never read.
+    record("miss", undefined, Date.now() - startedAt, glb.byteLength);
+    // Inputs are dead now; see releaseSources.
+    mvt = null;
+    releaseSources(sourceTiles, terrainTile);
     return new Response(glb, { headers });
   } catch (err) {
     console.error("renderGlbWasm failed (no-cache)", { z, x, y, err: String(err) });
     return retryLater(c, "renderer transient failure");
   }
 };
+
+/**
+ * Drop the render inputs the moment the glb exists.
+ *
+ * A dense z=14 Tokyo MVT is ~6 MB and its terrain WebP another ~0.3 MB, and
+ * they'd otherwise stay reachable from this handler's locals for the whole
+ * tail of the request — the response body and the R2 write both hold the
+ * (larger) glb at the same time, inside a 128 MB isolate that is also
+ * serving the rest of the viewport concurrently.
+ */
+function releaseSources(sources: SourceTile[], terrain: { webp: Uint8Array } | null): void {
+  sources.length = 0;
+  if (terrain) terrain.webp = new Uint8Array(0);
+}
 
 function retryLater(c: Context<{ Bindings: Env }>, msg: string): Response {
   return new Response(msg, {

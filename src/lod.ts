@@ -12,11 +12,21 @@
 // aggressively the further out you go, and the deeper zoom replaces
 // the coarser one when it streams in.
 //
-// Toggle modes via LOD_MODE; IMPL_VERSION encodes it so flipping
-// invalidates every cache layer atomically.
+// Toggle modes by editing okibi.epochs.json; IMPL_VERSION encodes the
+// mode so flipping invalidates every cache layer atomically.
+
+import epochs from "../okibi.epochs.json";
 
 export type LodMode = "add" | "replace";
-export const LOD_MODE: LodMode = "add";
+
+/**
+ * Read from okibi.epochs.json rather than written here, because it is part
+ * of the cache key and okibi reports it as the `param` epoch. Two constants
+ * would be two strings that agree until somebody edits one: okibi would then
+ * be matching an invalidation against tiles that never had that key, and
+ * would warm the wrong set without anything failing.
+ */
+export const LOD_MODE = epochs.tilesets["overture-global"].param as LodMode;
 
 export const MIN_Z = 12;
 export const MAX_Z = 14;

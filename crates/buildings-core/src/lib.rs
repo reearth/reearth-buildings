@@ -2,8 +2,6 @@
 //! per-building ground elevation pulled from a Re:Earth Terrain
 //! Terrarium WebP tile.
 
-use bytes::Bytes;
-
 pub mod coord;
 pub mod glb;
 pub mod height_config;
@@ -62,7 +60,7 @@ pub fn render_glb_lod(
     // the coarsest LOD level without invoking meshopt simplify.
     aabb_only: bool,
     terrain: Option<TerrainInput<'_>>,
-) -> Result<Bytes> {
+) -> Result<Vec<u8>> {
     let decoded: Vec<(u8, u32, u32, mvt_decoder::DecodedTile)> = sources
         .iter()
         .map(|s| Ok((s.z, s.x, s.y, mvt_decoder::decode_buildings(s.bytes)?)))
@@ -100,6 +98,13 @@ pub fn render_glb_lod(
         mesh::simplify_mesh(&mut mesh, simplify_ratio, simplify_target_error_m);
     }
 
+    // The decoded MVTs and the terrain raster are dead once the mesh
+    // exists, and on a dense z=14 tile they hold ~10 MB the glb writer
+    // would otherwise have to peak on top of.
+    drop(mesh_sources);
+    drop(decoded);
+    drop(terrain_tile);
+
     let center = coord::tile_center(out_z, out_x, out_y);
     // Origin sits on the ellipsoid (h=0). Ground elevation per building
     // is already baked into vertex positions during build_mesh.
@@ -107,8 +112,7 @@ pub fn render_glb_lod(
     let local_yup = remap_yup_to_enu(m);
     let transform = apply_zup_to_yup_to_output(local_yup);
 
-    let bytes = glb::write_glb(&mesh, transform);
-    Ok(Bytes::from(bytes))
+    Ok(glb::write_glb(mesh, transform))
 }
 
 fn remap_yup_to_enu(enu_to_ecef: [f64; 16]) -> [f64; 16] {

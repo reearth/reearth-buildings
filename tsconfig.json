@@ -19,5 +19,10 @@
     "allowJs": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "src/**/*.js", "src/wasm/**/*.d.ts", "worker-configuration.d.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.js",
+    "src/**/*.d.ts",
+    "worker-configuration.d.ts"
+  ]
 }

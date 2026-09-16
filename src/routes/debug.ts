@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import type { Env } from "../env";
 import { fetchWithRetry } from "../retry";
-import { currentPmtilesDate, upstreamUrl } from "../version";
+import { upstreamUrl, withRelease } from "../version";
 
 /**
  * Range proxy for the upstream Overture `buildings.pmtiles`.
@@ -17,31 +17,30 @@ import { currentPmtilesDate, upstreamUrl } from "../version";
  * pmtiles.ts (Cloudflare caches the full object and serves sub-ranges).
  */
 export const overturePmtilesProxy = async (c: Context<{ Bindings: Env }>) => {
-  let release: string;
-  try {
-    release = await currentPmtilesDate();
-  } catch (err) {
-    console.error("currentPmtilesDate failed", { err: String(err) });
-    return c.text("overture upstream unavailable", 502);
-  }
-  const url = upstreamUrl(release);
-
   const range = c.req.header("range");
   const init: RequestInit = {
     headers: range ? { Range: range } : {},
     cf: { cacheTtl: 86400, cacheEverything: true },
   } as RequestInit;
 
-  let upstream: Response;
+  // Same recovery as the glb route: a release cached from before Overture
+  // rolled it out of the bucket answers every range with a 404, and the
+  // only cure is to resolve the release again. Throwing on a bad status
+  // is what lets `withRelease` see that and retry.
+  let proxied: { upstream: Response; release: string };
   try {
-    upstream = await fetchWithRetry(url, init);
+    proxied = await withRelease(async (rel) => {
+      const resp = await fetchWithRetry(upstreamUrl(rel), init);
+      if (!resp.ok && resp.status !== 206) {
+        throw new Error(`overture upstream ${resp.status}`);
+      }
+      return { upstream: resp, release: rel };
+    });
   } catch (err) {
-    console.error("overture pmtiles proxy fetch failed", { url, err: String(err) });
+    console.error("overture pmtiles proxy fetch failed", { err: String(err) });
     return c.text("overture upstream unavailable", 502);
   }
-  if (!upstream.ok && upstream.status !== 206) {
-    return c.text(`overture upstream ${upstream.status}`, 502);
-  }
+  const { upstream, release } = proxied;
 
   const headers = new Headers();
   headers.set("access-control-allow-origin", "*");

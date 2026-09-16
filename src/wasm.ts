@@ -42,19 +42,30 @@ export function renderGlbWasm(
   aabbOnly = false,
   terrain: TerrainTile | null = null,
 ): Uint8Array {
-  const totalLen = sources.reduce((s, src) => s + src.mvt.length, 0);
-  const concat = new Uint8Array(totalLen);
   const lens = new Uint32Array(sources.length);
   const tiles = new Uint32Array(sources.length * 3);
-  let off = 0;
   for (let i = 0; i < sources.length; i++) {
     const s = sources[i]!;
-    concat.set(s.mvt, off);
-    off += s.mvt.length;
     lens[i] = s.mvt.length;
     tiles[i * 3] = s.z;
     tiles[i * 3 + 1] = s.x;
     tiles[i * 3 + 2] = s.y;
+  }
+  // One source is the only shape the glb route uses today, and a dense
+  // central-Tokyo MVT is several MB — copying it into a "concatenation" of
+  // one just to hand wasm-bindgen a buffer it copies again doubles the
+  // peak for nothing. Only pay for the join when there really are several.
+  let concat: Uint8Array;
+  if (sources.length === 1) {
+    concat = sources[0]!.mvt;
+  } else {
+    const totalLen = sources.reduce((s, src) => s + src.mvt.length, 0);
+    concat = new Uint8Array(totalLen);
+    let off = 0;
+    for (const s of sources) {
+      concat.set(s.mvt, off);
+      off += s.mvt.length;
+    }
   }
   const terrainBytes = terrain?.webp ?? new Uint8Array(0);
   const terrainZ = terrain?.z ?? 0;

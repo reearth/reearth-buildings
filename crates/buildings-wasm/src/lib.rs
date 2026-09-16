@@ -114,7 +114,7 @@ pub fn render_glb_lod(
         y: terrain_y,
         webp: terrain_webp,
     });
-    let bytes = buildings_core::render_glb_lod(
+    buildings_core::render_glb_lod(
         out_z,
         out_x,
         out_y,
@@ -125,6 +125,5 @@ pub fn render_glb_lod(
         aabb_only,
         terrain,
     )
-    .map_err(|e| JsError::new(&e.to_string()))?;
-    Ok(bytes.into())
+    .map_err(|e| JsError::new(&e.to_string()))
 }
