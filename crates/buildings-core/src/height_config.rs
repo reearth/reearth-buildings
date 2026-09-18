@@ -17,6 +17,21 @@ use std::collections::HashMap;
 /// real building footprint while staying serialisable.
 pub const SENTINEL_OPEN: f32 = 1.0e9;
 
+/// Selects which height-resolution strategy the cascade uses for
+/// buildings without explicit `height` or `num_floors`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelMode {
+    /// Legacy behaviour: cascade steps 3-5 (class table → subtype table
+    /// → footprint curve). The default, so existing configs and the
+    /// production `HeightConfig::default()` are unchanged.
+    #[default]
+    Off,
+    /// The gradient-boosted-tree model replaces cascade steps 3-5. Steps
+    /// 1-2 (explicit height, `num_floors`) still run first.
+    On,
+}
+
 /// Top-level config for [`crate::mesh::default_height_meters`] and
 /// [`crate::mesh::classify_urban`]. Cheap to clone (a few hundred bytes
 /// of strings); pass by reference into the mesh builder.
@@ -33,6 +48,12 @@ pub struct HeightConfig {
     pub urban_thresholds: UrbanThresholds,
     /// Footprint heuristic table, applied per [`UrbanLevel`].
     pub footprint: FootprintTable,
+    /// When [`ModelMode::On`], the GBT model replaces cascade steps 3-5;
+    /// [`ModelMode::Off`] (the default) keeps the legacy lookup tables.
+    /// `#[serde(default)]` so TOMLs written before this field parse as
+    /// `Off`.
+    #[serde(default)]
+    pub model: ModelMode,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -183,6 +204,7 @@ impl Default for HeightConfig {
                     ],
                 },
             },
+            model: ModelMode::Off,
         }
     }
 }
@@ -294,4 +316,35 @@ fn default_subtype_table() -> HashMap<String, f64> {
         (&["medical"], 18.0),
         (&["military", "transportation"], 8.0),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_mode_toml_round_trip() {
+        let mut cfg = HeightConfig::default();
+        assert_eq!(cfg.model, ModelMode::Off);
+
+        cfg.model = ModelMode::On;
+        let s = toml::to_string(&cfg).expect("serialize");
+        assert!(s.contains("model = \"on\""), "snake_case string repr: {s}");
+        let back: HeightConfig = toml::from_str(&s).expect("parse");
+        assert_eq!(back.model, ModelMode::On);
+    }
+
+    #[test]
+    fn model_field_missing_defaults_off() {
+        // A TOML written before the field existed must still parse.
+        let s = toml::to_string(&HeightConfig::default()).expect("serialize");
+        let stripped: String = s
+            .lines()
+            .filter(|l| !l.starts_with("model = "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!stripped.contains("model = "));
+        let back: HeightConfig = toml::from_str(&stripped).expect("parse");
+        assert_eq!(back.model, ModelMode::Off);
+    }
 }

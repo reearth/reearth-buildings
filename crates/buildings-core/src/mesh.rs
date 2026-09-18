@@ -8,7 +8,8 @@
 //! at each building's centroid.
 
 use crate::coord::{self, LonLat};
-use crate::height_config::HeightConfig;
+use crate::height_config::{HeightConfig, ModelMode};
+use crate::{features, height_model};
 use mvt_decoder::{BuildingFeature, DecodedTile};
 use std::collections::HashMap;
 use terrain_decoder::TerrainTile;
@@ -30,8 +31,11 @@ pub struct FeatureProps {
     /// upstream property was missing or 0; surfaces in glb as 0 with
     /// `noData=0`.
     pub source_height_m: Option<f32>,
-    /// Tag identifying which fallback path produced [`height_m`]. One of
-    /// `explicit` / `num_floors` / `class` / `subtype` / `footprint`.
+    /// Tag identifying which cascade path produced [`height_m`]. One of
+    /// `explicit` / `num_floors` / `model` / `class` / `subtype` /
+    /// `footprint` / `density`. `model` fires only when the config's
+    /// [`ModelMode`](crate::height_config::ModelMode) is `On`; the trailing
+    /// four are the legacy `Off` fallbacks.
     pub height_method: &'static str,
     pub min_height_m: f32,
     pub roof_height_m: f32,
@@ -118,10 +122,40 @@ pub fn classify_urban(avg_buildings_per_source: f32, cfg: &HeightConfig) -> Urba
     }
 }
 
-/// Pick the building height in metres via a 5-step fallback cascade:
+/// Everything the height cascade needs, decoupled from `BuildingFeature`
+/// so both the renderer and the height-optimizer resolve height through
+/// the same code path — with *merged* (multi-fragment) geometry and the
+/// building's home-tile [`features::TileContext`]. String fields borrow
+/// from the caller's owned attributes.
+pub struct HeightCascadeInput<'a> {
+    /// Overture `height`, already filtered to `> 0`.
+    pub explicit_height_m: Option<f64>,
+    /// Overture `num_floors`, already filtered to `> 0`.
+    pub num_floors: Option<u32>,
+    pub class: Option<&'a str>,
+    pub subtype: Option<&'a str>,
+    /// Merged footprint area across all fragments.
+    pub footprint_m2: f32,
+    /// Merged outer-ring perimeter across all fragments.
+    pub perimeter_m: f32,
+    pub has_name: bool,
+    pub has_parts: bool,
+    pub roof_shape: Option<&'a str>,
+    pub min_height_m: Option<f32>,
+    pub tile: features::TileContext,
+}
+
+/// Pick the building height in metres via the fallback cascade:
 ///
 ///   1. explicit Overture `height` (best — usually OSM-tagged)
-///   2. `num_floors × 3 m`
+///   2. `num_floors × meters_per_floor`
+///
+/// then, when [`cfg.model`](HeightConfig::model) is [`ModelMode::On`]:
+///
+///   3. the GBT model (`model`)
+///
+/// or, when it is [`ModelMode::Off`] (the default), the legacy tables:
+///
 ///   3. class lookup (`apartments`, `house`, `industrial`, …)
 ///   4. subtype lookup (coarser: `residential`, `commercial`, …)
 ///   5. footprint area heuristic, optionally boosted by neighbourhood
@@ -131,27 +165,43 @@ pub fn classify_urban(avg_buildings_per_source: f32, cfg: &HeightConfig) -> Urba
 /// surfaces as a property so downstream styling can distinguish
 /// "trust this" from "we guessed".
 pub fn default_height_meters(
-    feat: &BuildingFeature,
-    area_m2: f32,
+    input: &HeightCascadeInput<'_>,
     urban: UrbanLevel,
     cfg: &HeightConfig,
 ) -> (f64, &'static str) {
-    if let Some(h) = feat.height {
+    if let Some(h) = input.explicit_height_m {
         if h > 0.0 {
             return (h, "explicit");
         }
     }
-    if let Some(l) = feat.num_floors {
+    if let Some(l) = input.num_floors {
         if l > 0 {
             return ((l as f64) * cfg.meters_per_floor, "num_floors");
         }
     }
-    if let Some(cls) = feat.class.as_deref() {
+    if cfg.model == ModelMode::On {
+        let fi = features::FeatureInput {
+            footprint_m2: input.footprint_m2,
+            perimeter_m: input.perimeter_m,
+            class: input.class,
+            subtype: input.subtype,
+            has_name: input.has_name,
+            has_parts: input.has_parts,
+            roof_shape: input.roof_shape,
+            min_height_m: input.min_height_m,
+            tile: input.tile,
+        };
+        return (
+            height_model::builtin().predict_height_m(&fi) as f64,
+            "model",
+        );
+    }
+    if let Some(cls) = input.class {
         if let Some(h) = cfg.class_height_m.get(cls) {
             return (*h, "class");
         }
     }
-    if let Some(st) = feat.subtype.as_deref() {
+    if let Some(st) = input.subtype {
         if let Some(h) = cfg.subtype_height_m.get(st) {
             return (*h, "subtype");
         }
@@ -162,7 +212,7 @@ pub fn default_height_meters(
         UrbanLevel::Suburban => &cfg.footprint.suburban,
         UrbanLevel::Rural => &cfg.footprint.rural,
     };
-    let h = curve.lookup(area_m2);
+    let h = curve.lookup(input.footprint_m2);
     let method = if urban == UrbanLevel::Rural {
         "footprint"
     } else {
@@ -171,6 +221,67 @@ pub fn default_height_meters(
         "density"
     };
     (h, method)
+}
+
+/// Raw per-building attributes the height cascade needs, captured once
+/// from the fragment that first creates a pending entry. Held on the
+/// pending struct so both [`build_mesh`] and [`extract_buildings`] can
+/// resolve height in their emit loops from *merged* area/perimeter and
+/// the home tile's context, via the shared [`resolve_pending_height`].
+struct HeightInputs {
+    explicit_height_m: Option<f64>,
+    num_floors: Option<u32>,
+    class: Option<String>,
+    subtype: Option<String>,
+    has_name: bool,
+    has_parts: bool,
+    roof_shape: Option<String>,
+    min_height_m: Option<f32>,
+}
+
+/// Capture the cascade-relevant attributes of one raw feature. `height`
+/// and `num_floors` are pre-filtered to their positive-only forms so the
+/// cascade's steps 1-2 (and the anchor stats in [`features::tile_context`])
+/// agree on what counts as "present".
+fn height_inputs_from(feat: &BuildingFeature) -> HeightInputs {
+    HeightInputs {
+        explicit_height_m: feat.height.filter(|h| *h > 0.0),
+        num_floors: feat.num_floors.filter(|l| *l > 0),
+        class: feat.class.clone(),
+        subtype: feat.subtype.clone(),
+        has_name: feat.name.as_deref().is_some_and(|n| !n.is_empty()),
+        has_parts: feat.has_parts == Some(true),
+        roof_shape: feat.roof_shape.clone(),
+        min_height_m: feat.min_height.map(|h| h as f32),
+    }
+}
+
+/// Resolve a pending building's height from its merged geometry and
+/// home-tile context. The single shared call site for both emit loops,
+/// so the renderer and the optimizer can never skew.
+fn resolve_pending_height(
+    inputs: &HeightInputs,
+    total_area_m2: f32,
+    total_perimeter_m: f32,
+    ctx: features::TileContext,
+    urban: UrbanLevel,
+    cfg: &HeightConfig,
+) -> (f32, &'static str) {
+    let cascade = HeightCascadeInput {
+        explicit_height_m: inputs.explicit_height_m,
+        num_floors: inputs.num_floors,
+        class: inputs.class.as_deref(),
+        subtype: inputs.subtype.as_deref(),
+        footprint_m2: total_area_m2,
+        perimeter_m: total_perimeter_m,
+        has_name: inputs.has_name,
+        has_parts: inputs.has_parts,
+        roof_shape: inputs.roof_shape.as_deref(),
+        min_height_m: inputs.min_height_m,
+        tile: ctx,
+    };
+    let (h, method) = default_height_meters(&cascade, urban, cfg);
+    (h as f32, method)
 }
 
 /// One Overture building's resolved metadata + polygon ring(s) in
@@ -184,16 +295,47 @@ pub struct ExtractedBuilding {
     pub class: Option<String>,
     pub subtype: Option<String>,
     pub footprint_m2: f32,
+    /// Merged outer-ring perimeter in metres across all fragments.
+    pub perimeter_m: f32,
     pub height_m: f32,
     pub height_method: &'static str,
     pub source_height_m: Option<f32>,
     pub num_floors: Option<u32>,
+    pub has_name: bool,
+    pub has_parts: bool,
+    pub roof_shape: Option<String>,
+    /// Overture `min_height`; `None` when the attribute was absent
+    /// (distinct from the glb-facing `0.0`).
+    pub min_height_m: Option<f32>,
+    /// Home-tile surroundings context (the source tile that contributed
+    /// this building's first fragment). Feeds the model's anchor stats.
+    pub tile: features::TileContext,
     /// Area-weighted centroid (degrees).
     pub centroid: LonLat,
     /// Outer rings of every fragment, in lon/lat. One ring per
     /// fragment — multi-tile buildings have multiple. Used by the
     /// matcher's "point-in-polygon" test.
     pub outer_rings_lonlat: Vec<Vec<LonLat>>,
+}
+
+impl ExtractedBuilding {
+    /// The exact [`features::FeatureInput`] the wasm inference path sees
+    /// for this building. The **single** way the offline trainer may
+    /// build a feature vector — hand-assembling one would break the
+    /// train/predict parity firewall.
+    pub fn feature_input(&self) -> features::FeatureInput<'_> {
+        features::FeatureInput {
+            footprint_m2: self.footprint_m2,
+            perimeter_m: self.perimeter_m,
+            class: self.class.as_deref(),
+            subtype: self.subtype.as_deref(),
+            has_name: self.has_name,
+            has_parts: self.has_parts,
+            roof_shape: self.roof_shape.as_deref(),
+            min_height_m: self.min_height_m,
+            tile: self.tile,
+        }
+    }
 }
 
 /// Decode + dedup + height-resolve every building in `sources`.
@@ -209,9 +351,20 @@ pub fn extract_buildings(
     let avg_per_source = total_buildings as f32 / (sources.len().max(1) as f32);
     let urban = classify_urban(avg_per_source, height_config);
 
+    // ---- Pass A: per-source-tile surroundings context ----
+    let contexts: Vec<features::TileContext> = sources
+        .iter()
+        .map(|s| features::tile_context(s.tile, height_config))
+        .collect();
+
     struct Pending {
         props: FeatureProps,
+        height_inputs: HeightInputs,
+        /// Source tile (index into `sources`) of this building's first
+        /// fragment; selects the [`features::TileContext`] the model sees.
+        home_source_idx: usize,
         total_area_m2: f32,
+        total_perimeter_m: f32,
         rings: Vec<Vec<LonLat>>,
         centroid_lon_w: f64,
         centroid_lat_w: f64,
@@ -220,7 +373,8 @@ pub fn extract_buildings(
     let mut by_id: HashMap<u64, usize> = HashMap::new();
     let mut pending: Vec<Pending> = Vec::new();
 
-    for source in sources {
+    // ---- Pass B: collect + dedup fragments ----
+    for (src_idx, source) in sources.iter().enumerate() {
         for feat in &source.tile.buildings {
             // Mirror build_mesh: skip explicitly-flagged underground structures
             // so the optimizer evaluates the same set the renderer emits.
@@ -230,6 +384,7 @@ pub fn extract_buildings(
             let polygons = group_polygons(&feat.rings);
             for polygon in polygons {
                 let area = polygon_area_m2(&polygon, source, source.tile.extent) as f32;
+                let perimeter = polygon_perimeter_m(&polygon, source, source.tile.extent) as f32;
                 let centroid_ll = polygon_centroid_lonlat(&polygon, source, source.tile.extent);
                 let outer_ll: Vec<LonLat> = polygon
                     .outer
@@ -246,40 +401,38 @@ pub fn extract_buildings(
                     })
                     .collect();
                 let w = area as f64;
+                let make = || Pending {
+                    props: feature_props(feat),
+                    height_inputs: height_inputs_from(feat),
+                    home_source_idx: src_idx,
+                    total_area_m2: area,
+                    total_perimeter_m: perimeter,
+                    rings: Vec::new(),
+                    centroid_lon_w: 0.0,
+                    centroid_lat_w: 0.0,
+                    centroid_w: 0.0,
+                };
                 let entry_idx = match feat.id {
                     Some(fid) => match by_id.get(&fid).copied() {
                         Some(idx) => {
                             pending[idx].total_area_m2 += area;
-                            pending[idx].rings.push(outer_ll);
+                            pending[idx].total_perimeter_m += perimeter;
                             idx
                         }
                         None => {
                             let idx = pending.len();
                             by_id.insert(fid, idx);
-                            pending.push(Pending {
-                                props: feature_props(feat, area, urban, height_config),
-                                total_area_m2: area,
-                                rings: vec![outer_ll],
-                                centroid_lon_w: 0.0,
-                                centroid_lat_w: 0.0,
-                                centroid_w: 0.0,
-                            });
+                            pending.push(make());
                             idx
                         }
                     },
                     None => {
                         let idx = pending.len();
-                        pending.push(Pending {
-                            props: feature_props(feat, area, urban, height_config),
-                            total_area_m2: area,
-                            rings: vec![outer_ll],
-                            centroid_lon_w: 0.0,
-                            centroid_lat_w: 0.0,
-                            centroid_w: 0.0,
-                        });
+                        pending.push(make());
                         idx
                     }
                 };
+                pending[entry_idx].rings.push(outer_ll);
                 pending[entry_idx].centroid_lon_w += centroid_ll.lon_deg * w;
                 pending[entry_idx].centroid_lat_w += centroid_ll.lat_deg * w;
                 pending[entry_idx].centroid_w += w;
@@ -289,25 +442,17 @@ pub fn extract_buildings(
 
     pending
         .into_iter()
-        .map(|mut b| {
-            b.props.footprint_m2 = b.total_area_m2;
-            // Re-resolve height with the merged area (matters for
-            // multi-fragment buildings that fall through to the
-            // footprint heuristic).
-            let pseudo = mvt_decoder::BuildingFeature {
-                id: b.props.feature_id,
-                rings: vec![],
-                height: b.props.source_height_m.map(|h| h as f64),
-                num_floors: if b.props.num_floors == 0 {
-                    None
-                } else {
-                    Some(b.props.num_floors as u32)
-                },
-                class: b.props.class.clone(),
-                subtype: b.props.subtype.clone(),
-                ..Default::default()
-            };
-            let (h, method) = default_height_meters(&pseudo, b.total_area_m2, urban, height_config);
+        .map(|b| {
+            // Resolve height once, from merged geometry and the home
+            // tile's context — the shared helper both emit loops use.
+            let (h, method) = resolve_pending_height(
+                &b.height_inputs,
+                b.total_area_m2,
+                b.total_perimeter_m,
+                contexts[b.home_source_idx],
+                urban,
+                height_config,
+            );
             let centroid = if b.centroid_w > 0.0 {
                 LonLat {
                     lon_deg: b.centroid_lon_w / b.centroid_w,
@@ -322,17 +467,19 @@ pub fn extract_buildings(
             ExtractedBuilding {
                 feature_id: b.props.feature_id,
                 gers_id: b.props.gers_id,
-                class: b.props.class,
-                subtype: b.props.subtype,
+                class: b.height_inputs.class,
+                subtype: b.height_inputs.subtype,
                 footprint_m2: b.total_area_m2,
-                height_m: h as f32,
+                perimeter_m: b.total_perimeter_m,
+                height_m: h,
                 height_method: method,
                 source_height_m: b.props.source_height_m,
-                num_floors: if b.props.num_floors == 0 {
-                    None
-                } else {
-                    Some(b.props.num_floors as u32)
-                },
+                num_floors: b.height_inputs.num_floors,
+                has_name: b.height_inputs.has_name,
+                has_parts: b.height_inputs.has_parts,
+                roof_shape: b.height_inputs.roof_shape,
+                min_height_m: b.height_inputs.min_height_m,
+                tile: contexts[b.home_source_idx],
                 centroid,
                 outer_rings_lonlat: b.rings,
             }
@@ -350,7 +497,12 @@ struct Fragment {
 
 struct PendingFeature {
     props: FeatureProps,
+    height_inputs: HeightInputs,
+    /// Source tile (index into `sources`) of this building's first
+    /// fragment; selects the [`features::TileContext`] the model sees.
+    home_source_idx: usize,
     total_area_m2: f32,
+    total_perimeter_m: f32,
     fragments: Vec<Fragment>,
     /// Lon/lat sum and weight for the area-weighted centroid (used to
     /// sample terrain). Centroid is computed at emit time so that
@@ -380,6 +532,12 @@ pub fn build_mesh(
     let avg_per_source = total_buildings as f32 / (sources.len().max(1) as f32);
     let urban = classify_urban(avg_per_source, height_config);
 
+    // ---- 0. per-source-tile surroundings context (pass A) ----
+    let contexts: Vec<features::TileContext> = sources
+        .iter()
+        .map(|s| features::tile_context(s.tile, height_config))
+        .collect();
+
     // ---- 1. collect all fragments, grouping by feature id ----
     let mut by_id: HashMap<u64, usize> = HashMap::new();
     let mut pending: Vec<PendingFeature> = Vec::new();
@@ -401,6 +559,10 @@ pub fn build_mesh(
             }
             for polygon in polygons {
                 let area = polygon_area_m2(&polygon, source, source.tile.extent) as f32;
+                // Perimeter measured on the real outer ring, before any
+                // aabb collapse, so the feature contract is unaffected by
+                // the coarse-LOD silhouette simplification.
+                let perimeter = polygon_perimeter_m(&polygon, source, source.tile.extent) as f32;
                 let centroid_ll = polygon_centroid_lonlat(&polygon, source, source.tile.extent);
                 let polygon = if aabb_only {
                     polygon_to_aabb(&polygon)
@@ -417,14 +579,18 @@ pub fn build_mesh(
                         Some(idx) => {
                             pending[idx].fragments.push(fragment);
                             pending[idx].total_area_m2 += area;
+                            pending[idx].total_perimeter_m += perimeter;
                             idx
                         }
                         None => {
                             let idx = pending.len();
                             by_id.insert(fid, idx);
                             pending.push(PendingFeature {
-                                props: feature_props(feat, area, urban, height_config),
+                                props: feature_props(feat),
+                                height_inputs: height_inputs_from(feat),
+                                home_source_idx: src_idx,
                                 total_area_m2: area,
+                                total_perimeter_m: perimeter,
                                 fragments: vec![fragment],
                                 centroid_lon_weighted: 0.0,
                                 centroid_lat_weighted: 0.0,
@@ -438,8 +604,11 @@ pub fn build_mesh(
                         // feature counts as its own building.
                         let idx = pending.len();
                         pending.push(PendingFeature {
-                            props: feature_props(feat, area, urban, height_config),
+                            props: feature_props(feat),
+                            height_inputs: height_inputs_from(feat),
+                            home_source_idx: src_idx,
                             total_area_m2: area,
+                            total_perimeter_m: perimeter,
                             fragments: vec![fragment],
                             centroid_lon_weighted: 0.0,
                             centroid_lat_weighted: 0.0,
@@ -482,6 +651,20 @@ pub fn build_mesh(
             continue;
         }
         building.props.footprint_m2 = building.total_area_m2;
+
+        // Resolve height from merged geometry and the home tile's
+        // context — the shared helper `extract_buildings` also calls, so
+        // the renderer and the optimizer can never disagree.
+        let (height_m, height_method) = resolve_pending_height(
+            &building.height_inputs,
+            building.total_area_m2,
+            building.total_perimeter_m,
+            contexts[building.home_source_idx],
+            urban,
+            height_config,
+        );
+        building.props.height_m = height_m;
+        building.props.height_method = height_method;
 
         // Centroid for terrain sampling — area-weighted so multi-fragment
         // buildings settle on the right ground elevation.
@@ -533,13 +716,11 @@ pub fn build_mesh(
     }
 }
 
-fn feature_props(
-    feat: &BuildingFeature,
-    area_m2: f32,
-    urban: UrbanLevel,
-    cfg: &HeightConfig,
-) -> FeatureProps {
-    let (height_m, height_method) = default_height_meters(feat, area_m2, urban, cfg);
+/// Copy a feature's raw glb-facing attributes. Height resolution and
+/// `footprint_m2` are deliberately *not* set here — the emit loop fills
+/// `height_m` / `height_method` via [`resolve_pending_height`] once the
+/// merged geometry is known, and `footprint_m2` once fragments are summed.
+fn feature_props(feat: &BuildingFeature) -> FeatureProps {
     let source_height_m = feat.height.filter(|h| *h > 0.0).map(|h| h as f32);
     FeatureProps {
         feature_id: feat.id,
@@ -547,15 +728,15 @@ fn feature_props(
         name: feat.name.clone(),
         subtype: feat.subtype.clone(),
         class: feat.class.clone(),
-        height_m: height_m as f32,
+        height_m: 0.0,
         source_height_m,
-        height_method,
+        height_method: "",
         min_height_m: feat.min_height.unwrap_or(0.0) as f32,
         roof_height_m: feat.roof_height.unwrap_or(0.0) as f32,
         roof_shape: feat.roof_shape.clone(),
         num_floors: feat.num_floors.unwrap_or(0).min(u16::MAX as u32) as u16,
         ground_elev_m: 0.0,
-        footprint_m2: area_m2,
+        footprint_m2: 0.0,
     }
 }
 
@@ -685,6 +866,37 @@ fn ring_area_m2(ring: &[[i32; 2]], source: &Source<'_>, extent: u32, anchor: Lon
         a += p[0] * q[1] - q[0] * p[1];
     }
     0.5 * a
+}
+
+/// Outer-ring perimeter in metres (closed-ring edge sum). Sibling of
+/// [`polygon_area_m2`]; holes are ignored, matching the feature contract
+/// (`FeatureInput::perimeter_m` is outer-ring only). Uses the same
+/// source-tile ENU projection as the area, so a fragment's area and
+/// perimeter are measured in one consistent metric frame.
+fn polygon_perimeter_m(polygon: &Polygon, source: &Source<'_>, extent: u32) -> f64 {
+    let src_center = coord::tile_center(source.z, source.x, source.y);
+    ring_perimeter_m(&polygon.outer, source, extent, src_center)
+}
+
+fn ring_perimeter_m(ring: &[[i32; 2]], source: &Source<'_>, extent: u32, anchor: LonLat) -> f64 {
+    if ring.len() < 2 {
+        return 0.0;
+    }
+    let enu: Vec<[f64; 2]> = ring
+        .iter()
+        .map(|p| coord::tile_xy_to_enu_at(source.z, source.x, source.y, extent, p[0], p[1], anchor))
+        .collect();
+    // `ring` has its closing duplicate stripped (see `strip_close`), so the
+    // wrap-around edge (last → first) is what closes the polygon.
+    let mut per = 0.0;
+    for i in 0..enu.len() {
+        let p = enu[i];
+        let q = enu[(i + 1) % enu.len()];
+        let dx = q[0] - p[0];
+        let dy = q[1] - p[1];
+        per += (dx * dx + dy * dy).sqrt();
+    }
+    per
 }
 
 /// Lon/lat centroid of a polygon (outer ring only). Sample-quality
@@ -959,5 +1171,174 @@ mod tests {
             3,
             "level 0, is_underground=false, and unflagged buildings are all kept"
         );
+    }
+
+    /// A square ring `side` tile-units wide with its corner at (x0, y0).
+    fn ring(x0: i32, y0: i32, side: i32) -> Vec<[i32; 2]> {
+        vec![
+            [x0, y0],
+            [x0 + side, y0],
+            [x0 + side, y0 + side],
+            [x0, y0 + side],
+            [x0, y0],
+        ]
+    }
+
+    /// A building with no height metadata at all: resolves via the
+    /// footprint heuristic (model Off) or the GBT model (On).
+    fn bare(id: u64, rings: Vec<Vec<[i32; 2]>>) -> BuildingFeature {
+        BuildingFeature {
+            id: Some(id),
+            rings,
+            ..Default::default()
+        }
+    }
+
+    fn build_with_cfg(buildings: &[BuildingFeature], cfg: &HeightConfig) -> Mesh {
+        let tile = DecodedTile {
+            extent: 4096,
+            buildings: buildings.to_vec(),
+        };
+        let sources = [Source {
+            z: 14,
+            x: 0,
+            y: 0,
+            tile: &tile,
+        }];
+        build_mesh(14, 0, 0, &sources, AreaFilter::default(), false, None, cfg)
+    }
+
+    fn extract_with_cfg(
+        buildings: &[BuildingFeature],
+        cfg: &HeightConfig,
+    ) -> Vec<ExtractedBuilding> {
+        let tile = DecodedTile {
+            extent: 4096,
+            buildings: buildings.to_vec(),
+        };
+        let sources = [Source {
+            z: 14,
+            x: 0,
+            y: 0,
+            tile: &tile,
+        }];
+        extract_buildings(&sources, cfg)
+    }
+
+    /// Regression pin for the first-fragment-area bug: a two-fragment
+    /// building whose merged area lands in a different footprint bucket
+    /// than a single fragment's area. The old build_mesh resolved from
+    /// the first fragment only and would emit the smaller bucket's
+    /// height.
+    #[test]
+    fn multi_fragment_height_resolves_from_merged_area() {
+        let cfg = HeightConfig::default();
+        // Two disjoint ~150 m² squares (~12 m side at this tile's
+        // latitude): each alone sits in the 60-200 m² bucket, merged
+        // ~300 m² crosses into the 200-800 m² bucket.
+        let b = bare(7, vec![ring(0, 0, 235), ring(1000, 0, 235)]);
+        let mesh = build_with_cfg(&[b], &cfg);
+
+        assert_eq!(mesh.features.len(), 1);
+        let f = &mesh.features[0];
+        assert_eq!(f.height_method, "footprint");
+
+        let merged = f.footprint_m2;
+        let h_merged = cfg.footprint.rural.lookup(merged);
+        let h_first = cfg.footprint.rural.lookup(merged / 2.0);
+        assert_ne!(
+            h_merged, h_first,
+            "test geometry must straddle a bucket boundary \
+             (merged {merged} m²); adjust ring sizes"
+        );
+        assert!(
+            (f.height_m - h_merged as f32).abs() < 1e-4,
+            "height {} must come from the merged area, not a fragment",
+            f.height_m
+        );
+    }
+
+    #[test]
+    fn model_on_tags_and_clamps_metadata_less_buildings() {
+        let cfg = HeightConfig {
+            model: crate::height_config::ModelMode::On,
+            ..Default::default()
+        };
+
+        let mesh = build_with_cfg(&[bare(8, vec![ring(0, 0, 235)]), square(9)], &cfg);
+
+        let by_id: std::collections::HashMap<_, _> =
+            mesh.features.iter().map(|f| (f.feature_id, f)).collect();
+
+        let modeled = by_id[&Some(8)];
+        assert_eq!(modeled.height_method, "model");
+        let m = crate::height_model::builtin();
+        assert!(
+            modeled.height_m >= m.model.clamp_min_m && modeled.height_m <= m.model.clamp_max_m,
+            "model height {} outside clamp range",
+            modeled.height_m
+        );
+
+        // Steps 1-2 still bypass the model entirely.
+        let explicit = by_id[&Some(9)];
+        assert_eq!(explicit.height_method, "explicit");
+        assert!((explicit.height_m - 10.0).abs() < 1e-4);
+    }
+
+    /// The parity firewall: the renderer (build_mesh) and the evaluator
+    /// (extract_buildings) must resolve identical heights for the same
+    /// input, in both model modes. Covers every cascade path plus a
+    /// multi-fragment building.
+    #[test]
+    fn build_mesh_and_extract_buildings_resolve_identical_heights() {
+        let mut with_floors = bare(11, vec![ring(0, 300, 100)]);
+        with_floors.num_floors = Some(3);
+        let mut with_class = bare(12, vec![ring(300, 300, 100)]);
+        with_class.class = Some("office".to_string());
+        let mut with_subtype = bare(13, vec![ring(600, 300, 100)]);
+        with_subtype.subtype = Some("residential".to_string());
+        let buildings = vec![
+            square(10),
+            with_floors,
+            with_class,
+            with_subtype,
+            bare(14, vec![ring(900, 300, 100)]),
+            bare(15, vec![ring(0, 700, 235), ring(1000, 700, 235)]),
+        ];
+
+        for mode in [
+            crate::height_config::ModelMode::Off,
+            crate::height_config::ModelMode::On,
+        ] {
+            let cfg = HeightConfig {
+                model: mode,
+                ..Default::default()
+            };
+
+            let mesh = build_with_cfg(&buildings, &cfg);
+            let extracted = extract_with_cfg(&buildings, &cfg);
+            assert_eq!(mesh.features.len(), buildings.len());
+            assert_eq!(extracted.len(), buildings.len());
+
+            let rendered: std::collections::HashMap<_, _> = mesh
+                .features
+                .iter()
+                .map(|f| (f.feature_id, (f.height_m, f.height_method)))
+                .collect();
+            for e in &extracted {
+                let (h, method) = rendered[&e.feature_id];
+                assert_eq!(
+                    method, e.height_method,
+                    "method skew for {:?} in {mode:?}",
+                    e.feature_id
+                );
+                assert!(
+                    (h - e.height_m).abs() < 1e-4,
+                    "height skew for {:?} in {mode:?}: render {h} vs extract {}",
+                    e.feature_id,
+                    e.height_m
+                );
+            }
+        }
     }
 }
