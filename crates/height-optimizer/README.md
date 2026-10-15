@@ -328,6 +328,15 @@ acceptable.
 
 ### 5.2 Proposed buildings-core changes
 
+> **Update (2026-07-04):** the bimodal/context problem below is now
+> addressed by a gradient-boosted-tree model that replaces cascade
+> steps 3–5, trained against PLATEAU with a train/holdout city split.
+> MAE improves in all 8 evaluation cities (e.g. iiyama 7.95 → 1.53,
+> holdout tsukuba 6.79 → 3.55). See
+> [GBT_MODEL_REPORT.md](GBT_MODEL_REPORT.md) for design, accuracy,
+> and request-time speed. It ships behind `model = "off"` pending
+> rollout.
+
 TOML configuration alone can't fix the bimodal problem, so the next
 wins require code changes. In priority order:
 

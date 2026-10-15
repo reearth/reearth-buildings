@@ -17,6 +17,18 @@ pub struct Stats {
 
 impl Stats {
     pub fn compute(pairs: &[&Pair<'_>]) -> Self {
+        let pt: Vec<(f32, f32)> = pairs
+            .iter()
+            .map(|p| (p.estimate.height_m, p.truth.measured_height_m))
+            .collect();
+        Self::from_pred_truth(&pt)
+    }
+
+    /// Residual statistics over `(predicted_m, truth_m)` pairs. Residual is
+    /// `pred - truth`; percentage error is `|residual| / truth`. This is the
+    /// shared kernel `compute` delegates to, so the offline trainer can
+    /// score arbitrary model predictions with the identical metric.
+    pub fn from_pred_truth(pairs: &[(f32, f32)]) -> Self {
         let n = pairs.len();
         if n == 0 {
             return Self::default();
@@ -27,13 +39,13 @@ impl Stats {
         let mut abs_residuals: Vec<f32> = Vec::with_capacity(n);
         let mut hits20 = 0usize;
         let mut hits50 = 0usize;
-        for p in pairs {
-            let r = p.residual_m as f64;
+        for &(pred, truth) in pairs {
+            let r = (pred - truth) as f64;
             sum_abs += r.abs();
             sum_sq += r * r;
             sum_signed += r;
             abs_residuals.push(r.abs() as f32);
-            let truth = p.truth.measured_height_m as f64;
+            let truth = truth as f64;
             let pct = if truth > 0.0 {
                 r.abs() / truth
             } else {
