@@ -1,3 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" stroke="#c95f3d" stroke-width="4" stroke-linejoin="miter" stroke-linecap="square">
-  <polyline points="2,54 2,38 12,38 12,28 22,28 22,16 34,16 34,30 44,30 44,22 54,22 54,42 62,42 62,54"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" fill="none" viewBox="0 0 28 28"><g clip-path="url(#a)"><path fill="#59acf6" d="M28 0H0v28h28z"/><path fill="#e4f0ff" d="M14.065 4.844 0 11.536V28h14.065z"/><path fill="#262c38" d="M14.065 4.844 28 11.536V28H14.065z"/></g><defs><clipPath id="a"><rect width="28" height="28" fill="#fff" rx="6"/></clipPath></defs></svg>
