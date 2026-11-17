@@ -5,6 +5,8 @@
 <title>Re:Earth Buildings — open 3D building tiles for the world</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<!-- Shared Re:Earth nav bar (public/reearth-nav.js); sets --reearth-nav-h. -->
+<script src="/reearth-nav.js"></script>
 
 <meta name="description" content="Re:Earth Buildings is an open, global 3D building tileset built from Overture Maps and Re:Earth Terrain. Drop the tileset.json URL into Cesium or any 3D Tiles 1.1 client. Free under ODbL." />
 <meta name="theme-color" content="#c95f3d" />
@@ -36,18 +38,25 @@
     display: none; border-left: 2px solid #2a3f55; z-index: 5;
   }
   #compare-map { position: absolute; inset: 0; }
-  #compare-label { top: 12px; right: 12px; pointer-events: none; }
+  #compare-label { top: calc(var(--reearth-nav-h) + 12px); right: 12px; pointer-events: none; }
   #compare-label strong { color: #c95f3d; }
   #compare-status { color: #5a6b7d; }
   body.split #app { right: 50%; }
   body.split #compare-pane { display: block; }
-  #btn-compare {
-    background: transparent; border: 1px solid #2a3f55; color: #2a3f55;
-    padding: 5px 10px; border-radius: 6px; font: inherit; cursor: pointer;
-    font-weight: 600;
+  /* Get Started and Compare, in the "end" slot of <reearth-nav>. Pills
+     sized and lettered like the nav's links. */
+  #actions { display: flex; gap: 8px; }
+  #actions button {
+    height: 32px; padding: 0 14px; border-radius: 999px; cursor: pointer;
+    font: 500 14px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+    white-space: nowrap; transition: background 200ms ease, border-color 200ms ease, color 200ms ease;
   }
-  #btn-compare:hover { background: #2a3f55; color: #f2efe8; }
-  #btn-compare.active { background: #2a3f55; color: #f2efe8; }
+  #btn-compare {
+    background: rgba(255, 255, 255, 0.4); border: 1px solid rgba(20, 17, 15, 0.3); color: #14110f;
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  }
+  #btn-compare:hover { border-color: #14110f; }
+  #btn-compare.active { background: #262c38; border-color: #262c38; color: #fff; }
   /* Palette: Inverted Blueprint
      Base    #f2efe8 (paper ivory)
      Assort  #2a3f55 (slate blue)
@@ -62,7 +71,7 @@
     box-sizing: border-box;
   }
   /* Attributes of the clicked building. Hidden until something is picked. */
-  #info { top: 60px; right: 12px; width: 280px; max-height: calc(100vh - 140px);
+  #info { top: calc(var(--reearth-nav-h) + 12px); right: 12px; width: 280px; max-height: calc(100vh - 140px);
           overflow-y: auto; display: none; z-index: 6; }
   #info.open { display: block; }
   #info header { display: flex; align-items: center; justify-content: space-between;
@@ -74,16 +83,7 @@
   #info th, #info td { text-align: left; vertical-align: top; padding: 2px 0;
                        border-top: 1px solid rgba(42, 63, 85, 0.12); word-break: break-word; }
   #info th { color: #5a6b7d; font-weight: 500; padding-right: 8px; white-space: nowrap; }
-  #toggle { top: 12px; left: 12px; display: flex; gap: 8px 6px; align-items: center;
-            flex-wrap: wrap; max-width: calc(100vw - 24px); }
-  #toggle .title { font-size: 13px; font-weight: 600; letter-spacing: 0.2px; margin-right: 8px; }
-  #toggle .title a { color: #2a3f55; text-decoration: none; }
-  #toggle .title a:hover { text-decoration: underline; }
-  #btn-get-started {
-    background: #c95f3d; border: 1px solid #c95f3d; color: #fff;
-    padding: 5px 10px; border-radius: 6px; font: inherit; cursor: pointer;
-    font-weight: 700; letter-spacing: 0.3px;
-  }
+  #btn-get-started { background: #c95f3d; border: 1px solid #c95f3d; color: #fff; }
   #btn-get-started:hover { background: #b8502f; border-color: #b8502f; }
 
   /* Bottom-right credit. Lifted above Navara's attribution control
@@ -158,9 +158,9 @@
   #modal .ref a { color: #c95f3d; }
 
   @media (max-width: 640px) {
-    #toggle { gap: 6px 4px; padding: 8px 10px; font-size: 12px; }
-    #toggle .title { margin-right: 4px; }
-    #btn-get-started { padding: 6px 9px; font-size: 12px; }
+    /* No room in the bar, and a split screen is too narrow to use. */
+    #btn-compare { display: none; }
+    #actions button { padding: 0 12px; font-size: 13px; }
     #info { top: auto; bottom: 64px; left: 12px; right: 12px; width: auto; max-height: 40vh; }
     #credit { font-size: 10px; right: 4px; bottom: 30px; }
     #modal header { padding: 12px 14px; }
@@ -186,11 +186,13 @@
   </header>
   <table><tbody id="info-body"></tbody></table>
 </div>
-<div id="toggle" class="overlay">
-  <span class="title"><a href="/">Re:Earth Buildings</a></span>
-  <button id="btn-get-started" type="button">Get Started</button>
-  <button id="btn-compare" type="button" title="Split-screen against the raw Overture footprints (top-down, camera synced)">Compare</button>
-</div>
+<!-- tone="light": black text, since the map is light. -->
+<reearth-nav current="buildings" tone="light">
+  <div id="actions" slot="end">
+    <button id="btn-get-started" type="button">Get Started</button>
+    <button id="btn-compare" type="button" title="Split-screen against the raw Overture footprints (top-down, camera synced)">Compare</button>
+  </div>
+</reearth-nav>
 <div id="credit">
   <a class="gh" href="https://github.com/reearth/reearth-buildings" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository">
     <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
