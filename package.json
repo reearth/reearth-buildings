@@ -6,23 +6,34 @@
   "description": "On-demand 3D Tiles for buildings.reearth.land (TS host + Rust→WASM hot path)",
   "scripts": {
     "build:wasm": "node scripts/build-wasm.mjs",
-    "build": "pnpm run build:wasm && wrangler deploy --dry-run --outdir dist",
-    "dev": "pnpm run build:wasm && wrangler dev",
-    "deploy": "pnpm run build:wasm && wrangler deploy",
+    "build:viewer": "vite build",
+    "build": "pnpm run build:wasm && pnpm run build:viewer && wrangler deploy --dry-run --outdir dist",
+    "dev": "pnpm run build:wasm && pnpm run build:viewer && wrangler dev",
+    "dev:viewer": "vite",
+    "deploy": "pnpm run build:wasm && pnpm run build:viewer && wrangler deploy",
     "cf-typegen": "wrangler types --strict-vars false",
-    "typecheck": "pnpm run cf-typegen && tsc --noEmit",
-    "lint": "biome check src",
-    "format": "biome format --write src"
+    "typecheck": "pnpm run cf-typegen && tsc --noEmit && tsc --noEmit -p viewer",
+    "lint": "biome check src viewer",
+    "format": "biome format --write src viewer"
   },
   "dependencies": {
+    "@navaramap/three": "^0.3.1",
+    "@navaramap/three-default-descs": "^0.3.1",
+    "@navaramap/three-default-plugin": "^0.3.1",
+    "@navaramap/three-plugins": "^0.3.1",
     "@reearth/okibi": "^0.9.0",
     "hono": "^4.6.0",
-    "pmtiles": "^4.3.0"
+    "maplibre-gl": "^4.7.1",
+    "pmtiles": "^4.3.0",
+    "postprocessing": "^6.39.6",
+    "three": "^0.187.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
+    "@types/three": "^0.187.0",
     "meshoptimizer": "^1.1.1",
     "typescript": "^5.6.0",
+    "vite": "^8.3.8",
     "wrangler": "^4.0.0"
   },
   "packageManager": "pnpm@9.12.0"

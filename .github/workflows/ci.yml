@@ -113,6 +113,7 @@ jobs:
       - run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:wasm
+      - run: pnpm build:viewer
       - run: pnpm lint
       - run: pnpm typecheck
       # wrangler deploy --dry-run doubles as a bundle-size / config sanity
@@ -165,6 +166,9 @@ jobs:
 
       - name: Build WASM
         run: pnpm build:wasm
+
+      - name: Build viewer
+        run: pnpm build:viewer
 
       # wrangler.toml pins account_id and the R2 bucket name, so the only
       # thing CI needs to supply is the API token.

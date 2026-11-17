@@ -42,8 +42,9 @@ Re:Earth Buildings is a small Cloudflare Workers + Rust→WASM project that turn
 │   ├── lod.ts                  LOD policy (zoom buckets, area filters, simplify)
 │   ├── wasm.ts                 wasm-bindgen wrapper
 │   └── wasm/                   built artifact (gitignored), populated by build:wasm
-├── public/                     static assets served via [assets] binding
-│   └── index.html              bundled Cesium viewer
+├── viewer/                     bundled Navara viewer (index.html + main.ts), built by Vite
+├── public/                     favicon / OG image, copied into the viewer build
+├── vite.config.ts              viewer build → build/viewer, served via [assets] binding
 ├── scripts/
 │   └── build-wasm.mjs          wasm-pack + wasm-opt + workerd-glue patch
 ├── crates/
@@ -69,14 +70,19 @@ pnpm install
 pnpm run build:wasm
 
 # Local dev server (binds R2 + KV locally via wrangler's simulator).
+# Builds the viewer once; rerun `pnpm run build:viewer` after editing viewer/.
 pnpm run dev    # → http://localhost:8787
+
+# Optional: Vite dev server with hot reload for viewer/, proxying the
+# tileset and tiles to the `wrangler dev` above.
+pnpm run dev:viewer    # → http://localhost:5173
 ```
 
 Useful URLs once `wrangler dev` is up:
 
 | URL | Purpose |
 |---|---|
-| `http://localhost:8787/` | Bundled Cesium viewer (terrain, sun, atmosphere ON) |
+| `http://localhost:8787/` | Bundled Navara viewer (terrain, sun shadows, SSAO ON) |
 | `http://localhost:8787/tileset.json` | Root 3D Tiles entry point |
 | `http://localhost:8787/v4-add/14/14552/6451.glb` | A specific glb tile (Tokyo Station area) |
 
@@ -85,7 +91,7 @@ Useful URLs once `wrangler dev` is up:
 ### Other commands
 
 ```bash
-pnpm run typecheck        # wrangler types + tsc --noEmit
+pnpm run typecheck        # wrangler types + tsc --noEmit (worker and viewer)
 pnpm run lint             # biome check
 cargo test --workspace    # Rust unit tests
 cargo check --workspace   # Fast type check
