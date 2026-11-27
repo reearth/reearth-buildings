@@ -86,13 +86,12 @@
   #btn-get-started { background: #c95f3d; border: 1px solid #c95f3d; color: #fff; }
   #btn-get-started:hover { background: #b8502f; border-color: #b8502f; }
 
-  /* Bottom-right credit. Lifted above Navara's attribution control
-     so the two don't overlap on narrow viewports. */
+  /* Bottom-left credit, flush with the bottom edge. */
   #credit {
-    position: absolute; right: 8px; bottom: 32px;
+    position: absolute; left: 0; bottom: 0;
     font: 11px/1.4 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
     color: #2a3f55;
-    background: rgba(242, 239, 232, 0.6); padding: 4px 8px; border-radius: 6px;
+    background: rgba(242, 239, 232, 0.6); padding: 4px 8px; border-radius: 0 6px 0 0;
     backdrop-filter: blur(10px) saturate(140%);
     -webkit-backdrop-filter: blur(10px) saturate(140%);
     pointer-events: auto;
@@ -162,7 +161,7 @@
     #btn-compare { display: none; }
     #actions button { padding: 0 12px; font-size: 13px; }
     #info { top: auto; bottom: 64px; left: 12px; right: 12px; width: auto; max-height: 40vh; }
-    #credit { font-size: 10px; right: 4px; bottom: 30px; }
+    #credit { font-size: 10px; }
     #modal header { padding: 12px 14px; }
     #modal .body { padding: 12px 14px 16px; }
     .codeblock pre { font-size: 11px; padding: 32px 10px 10px; }
