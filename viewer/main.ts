@@ -1,4 +1,5 @@
 import ThreeView, { Color, vector3ToGeodetic } from "@navaramap/three";
+import type { SkyMeshDesc } from "@navaramap/three-default-descs";
 import { type DefaultDescriptions, DefaultPlugin } from "@navaramap/three-default-plugin";
 import { TileJsonPlugin } from "@navaramap/three-plugins";
 import type { Map as MaplibreMap } from "maplibre-gl";
@@ -41,10 +42,18 @@ await view.init();
 // timezone.
 view.atmosphere.date = new Date("2024-11-01T01:00:00Z");
 
-// Sky and stars, without the photoreal aerial perspective / tone mapping:
-// the viewer keeps the flat, paper-map look of the basemap.
-view.addMesh({ sky: {} });
-view.addMesh({ stars: {} });
+// Sky without the photoreal aerial perspective / tone mapping: the viewer
+// keeps the flat, paper-map look of the basemap. The sky shader outputs HDR
+// luminance meant to go through exposure and tone mapping; written straight
+// to the screen it renders a dull navy even at 10:00.
+// Scaling the sky's radiance-to-luminance factor brightens only the sky, so
+// the basemap and buildings keep their colours. 4 gives a clear daytime blue
+// without clipping the horizon to white. The uniform's Vector3 is shared
+// with the atmosphere parameters, so swap in a scaled copy, not scale it in
+// place. No stars: the sun is pinned to mid-morning.
+const sky = view.addMesh<SkyMeshDesc>({ sky: {} });
+const skyLuminance = sky.ref.getSkyMesh()?.raw.material.uniforms.SKY_SPECTRAL_RADIANCE_TO_LUMINANCE;
+if (skyLuminance) skyLuminance.value = skyLuminance.value.clone().multiplyScalar(4);
 
 // Sun with cascaded shadows on both the terrain and the buildings. The
 // 4096² map and normal bias keep shadow acne off tall façades when the sun
